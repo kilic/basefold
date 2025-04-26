@@ -1,0 +1,39 @@
+[package]
+edition = "2021"
+name = "basefold-study"
+version = "0.1.0"
+
+[dependencies]
+
+num-bigint = {version = "0.4", features = ["rand"]}
+num-integer = "0.1"
+num-traits = "0.2"
+
+generic-array = {version = "0.14", features = ["serde"]}
+itertools = "0.13"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+rand_core = {version = "0.6", default-features = false}
+rayon = "1.8"
+serde = {version = "1.0", features = ["derive"]}
+
+aes = "0.8"
+blake2 = "0.10.6"
+ctr = "0.9"
+digest = "0.10.3"
+sha2 = "0.10.8"
+sha3 = "0.10.8"
+
+tracing = "0.1.37"
+tracing-forest = {version = "0.1.6", features = ["ansi", "smallvec"]}
+tracing-subscriber = {version = "0.3.17", features = ["std", "env-filter"]}
+
+transpose = "0.2.3"
+
+[features]
+default = []
+prover-sanity = []
+
+[profile.debug-release]
+debug-assertions = true
+inherits = "release"
