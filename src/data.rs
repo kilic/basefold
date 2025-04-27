@@ -236,7 +236,7 @@ impl<S: Storage> Matrix<S> {
         (Matrix::new(width, v0), Matrix::new(width, v1))
     }
 
-    pub fn split_mut_half<V>(&mut self) -> (Matrix<&mut [V]>, Matrix<&mut [V]>)
+    pub fn split_half_mut<V>(&mut self) -> (Matrix<&mut [V]>, Matrix<&mut [V]>)
     where
         S: AsMut<[V]>,
     {

@@ -1,11 +1,11 @@
-pub mod field;
-pub mod basefold;
 pub mod arithmetic;
-pub mod utils;
-pub mod hash;
+pub mod basefold;
 pub mod data;
+pub mod field;
+pub mod hash;
 pub mod merkle;
 pub mod mle;
+pub mod utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Error {

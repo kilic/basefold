@@ -15,7 +15,7 @@ use crate::Error;
 use code::RandomFoldableCode;
 use itertools::Itertools;
 use std::marker::PhantomData;
-use sumcheck::sumcheck_prover_round;
+use sumcheck::batch_sumcheck_prover_round;
 use sumcheck::sumcheck_verifier_round;
 
 pub mod code;
@@ -71,19 +71,33 @@ impl<
     fn fold<Transcript>(
         &self,
         transcript: &mut Transcript,
-        eval: Ext,
-        point: &[Ext],
+        evals: &[Ext],
+        points: &[&[Ext]],
         data: &mut Vec<Ext>,
         cw: &mut Vec<Ext>,
     ) -> Result<Vec<VectorCommitmentData<Ext, VCom::Digest>>, Error>
     where
         Transcript: Writer<VCom::Digest> + Writer<Ext> + Challenge<Ext>,
     {
-        let mut eq = crate::mle::eq(point);
-        let mut eval = eval;
+        let beta: Ext = transcript.draw();
+        let mut sum = evals.horner(beta);
+
+        let mut eqs = {
+            let eqs = points
+                .iter()
+                .flat_map(|p| crate::mle::eq(p))
+                .collect::<Vec<_>>();
+            let num_vars = points.first().unwrap().len();
+            let height = 1 << num_vars;
+            let width = points.len();
+            let mut output = vec![Ext::ZERO; height * width]; // TODO: use cheaper alloc
+            transpose::transpose(&eqs, &mut output, height, width);
+            MatrixOwn::new(width, output)
+        };
+
         (0..self.code.d())
             .map(|_| {
-                let r = sumcheck_prover_round(transcript, &mut eval, &mut eq, data)?;
+                let r = batch_sumcheck_prover_round(transcript, &mut sum, &mut eqs, data, beta)?;
                 let comm: VectorCommitmentData<Ext, VCom::Digest> =
                     self.vec_comm.commit(transcript, cw.to_vec())?;
                 self.code.fold(cw, r);
@@ -95,7 +109,7 @@ impl<
     pub fn open<Transcript>(
         &self,
         transcript: &mut Transcript,
-        point: &[Ext],
+        points: &[&[Ext]],
         data: &MatrixOwn<F>,
         comm: &MatrixCommitmentData<F, MCom::Digest>,
     ) -> Result<(), Error>
@@ -109,11 +123,18 @@ impl<
     {
         assert_eq!(self.code.n_vars(), data.k());
         assert_eq!(self.code.n_vars() + self.code.c(), comm.k());
-        assert_eq!(self.code.n_vars(), point.len());
+        assert_eq!(self.code.n_vars(), points.first().unwrap().len());
+        assert!(!points.is_empty());
 
         // evaluate the data at the point
-        let evals = crate::mle::eval_mat(data, point);
-        evals.iter().try_for_each(|&e| transcript.write(e))?;
+        let evals = points
+            .iter()
+            .map(|point| {
+                let evals = crate::mle::eval_mat(data, point);
+                evals.iter().try_for_each(|&e| transcript.write(e))?;
+                Ok(evals)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // compress with alpha
         let alpha: Ext = Challenge::draw(transcript);
@@ -123,13 +144,16 @@ impl<
             .iter()
             .map(|row| row.horner(alpha))
             .collect::<Vec<_>>();
-        let compressed_eval = evals.horner(alpha);
+        let compressed_eval = evals
+            .iter()
+            .map(|row| row.horner(alpha))
+            .collect::<Vec<_>>();
 
         // run sumcheck and fold the data
         let comms = self.fold(
             transcript,
-            compressed_eval,
-            point,
+            &compressed_eval,
+            points,
             &mut compressed_data,
             &mut compressed_cw,
         )?;
@@ -166,7 +190,7 @@ impl<
         comm: MCom::Digest,
         width: usize,
         transcript: &mut Transcript,
-        point: &[Ext],
+        points: &[&[Ext]],
     ) -> Result<(), Error>
     where
         Transcript: Reader<F>
@@ -177,15 +201,24 @@ impl<
             + ChallengeBits,
     {
         // read and compress evaluations
-        let evals: Vec<Ext> = transcript.read_many(width)?;
+        let num_points = points.len();
+        let evals: Vec<Vec<Ext>> = (0..num_points)
+            .map(|_| transcript.read_many(width))
+            .collect::<Result<Vec<_>, _>>()?;
         let alpha: Ext = Challenge::draw(transcript);
         let k = self.code.n_vars() + self.code.c();
-        let compressed_evals = evals.horner(alpha);
+        let compressed_eval = evals
+            .iter()
+            .map(|row| row.horner(alpha))
+            .collect::<Vec<_>>();
 
         // run sumcheck and read round commitments
-        let mut red = compressed_evals;
+        // let mut red = compressed_evals;
+
         let mut comms: Vec<VCom::Digest> = vec![];
         let mut rs = vec![];
+        let beta: Ext = Challenge::draw(transcript);
+        let mut red = compressed_eval.horner(beta);
         for _ in 0..self.code.d() {
             rs.push(sumcheck_verifier_round(2, &mut red, transcript)?);
             comms.push(transcript.read()?);
@@ -195,12 +228,23 @@ impl<
 
         // make sure final poly is correct
         {
-            let (z_poly, z_eq) = point.split_at(self.code.k0());
+            // let (z_poly, z_eq) = point.split_at(self.code.k0());
+            // let u0 = crate::mle::eval_eq_xy(&rs, z_eq);
+            // let u1 = crate::mle::eval(&poly, z_poly);
+            // (u0 * u1 == red).then_some(()).ok_or(Error::Verify)?;
+
             rs.reverse();
-            let u0 = crate::mle::eval_eq_xy(&rs, z_eq);
-            let u1 = crate::mle::eval(&poly, z_poly);
-            (u0 * u1 == red).then_some(()).ok_or(Error::Verify)?;
+            let e = points
+                .iter()
+                .map(|point| {
+                    let (z_poly, z_eq) = point.split_at(self.code.k0());
+                    let e1 = crate::mle::eval_eq_xy(&rs, z_eq);
+                    let e0 = crate::mle::eval(&poly, z_poly);
+                    e0 * e1
+                })
+                .collect::<Vec<_>>();
             rs.reverse();
+            (e.horner(beta) == red).then_some(()).ok_or(Error::Verify)?;
         }
 
         // find the base codeword

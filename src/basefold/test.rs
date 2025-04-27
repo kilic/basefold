@@ -23,6 +23,7 @@ fn test_pcs() {
     let k0 = 3;
     let width = 3;
     let n_test = 22;
+    let num_points = 10;
 
     let mut rng = crate::test::seed_rng();
     let code = Basecode::<F>::generate(&mut rng, n_vars, k0, c);
@@ -37,9 +38,12 @@ fn test_pcs() {
     let mut transcript = Writer::init("");
     let comm = basefold.commit::<_>(&mut transcript, &data).unwrap();
 
-    let point = (0..n_vars).map(|_| rng.gen()).collect::<Vec<Ext>>();
+    let points = (0..num_points)
+        .map(|_| (0..n_vars).map(|_| rng.gen()).collect::<Vec<Ext>>())
+        .collect::<Vec<_>>();
+    let points = points.iter().map(Vec::as_slice).collect::<Vec<_>>();
     basefold
-        .open(&mut transcript, &point, &data, &comm)
+        .open(&mut transcript, &points, &data, &comm)
         .unwrap();
     let checkpoint0: F = transcript.draw();
 
@@ -48,7 +52,7 @@ fn test_pcs() {
 
     let comm: [u8; 32] = transcript.read().unwrap();
     basefold
-        .verify(comm, width, &mut transcript, &point)
+        .verify(comm, width, &mut transcript, &points)
         .unwrap();
     let checkpoint1: F = transcript.draw();
     assert_eq!(checkpoint0, checkpoint1);

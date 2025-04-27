@@ -111,7 +111,7 @@ impl<F: Field> RandomFoldableCode<F> for Basecode<F> {
         (1..=self.d()).for_each(|i| {
             let ni = 1 << (self.n0() + i);
             cw.chunks_mut(ni).for_each(|mut chunk| {
-                let (mut l, mut r) = chunk.split_mut_half();
+                let (mut l, mut r) = chunk.split_half_mut();
                 l.iter_mut()
                     .zip(r.iter_mut())
                     .zip(self.ts[i - 1].iter())
