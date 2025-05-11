@@ -160,7 +160,7 @@ mod test {
         let k = 25;
         let width = 5;
         let mut rng = crate::test::seed_rng();
-        crate::test::init_tracing();
+        // crate::test::init_tracing();
 
         let zs = (0..k).map(|_| F::rand(&mut rng)).collect::<Vec<_>>();
         let mat = (0..(1 << k) * width)

@@ -311,7 +311,7 @@ mod test {
         // crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
         let k = 11;
-        let width = 1;
+        let width = 2;
         let mat = (0..width * (1 << k))
             .map(|_| F::rand(&mut rng))
             .collect::<Vec<_>>();

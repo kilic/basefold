@@ -132,19 +132,22 @@ impl<F: Field, Ext: ExtField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
         let k = poly.k() - 1;
 
         let (p0, _) = poly.split_at_mut(1 << k);
-        let sweetness = self.eq_lad1.len();
-        let switch = self.round > sweetness - 1;
-        let a0 = if !switch {
-            let eq0 = self.eq_lad0.last().unwrap();
-            let eq1 = &self.eq_lad1[self.eq_lad1.len() - 1 - self.round];
+        let a0 = if !self.eq_lad1.is_empty() {
+            let eq1 = &self.eq_lad1.pop().unwrap();
+
+            // if eq1 exhausted, drain eq0
+            let eq0 = if self.eq_lad1.is_empty() {
+                &self.eq_lad0.pop().unwrap()
+            } else {
+                self.eq_lad0.last().unwrap()
+            };
+
             p0.chunks(eq0.len())
                 .zip_eq(eq1.iter())
                 .map(|(part, &c)| part.par_dot(eq0) * c)
                 .sum()
         } else {
-            // TODO: indexing looks very ugly
-            let eq0 = &self.eq_lad0[self.eq_lad0.len() - self.round + sweetness - 2];
-            p0.par_dot(eq0)
+            p0.par_dot(&self.eq_lad0.pop().unwrap())
         };
 
         let a1 = (*claim - a0) * self.zs_inv[k];
@@ -211,7 +214,7 @@ mod test {
         // crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
         let k = 11;
-        let width = 1;
+        let width = 2;
         let mat = (0..width * (1 << k))
             .map(|_| F::rand(&mut rng))
             .collect::<Vec<_>>();
