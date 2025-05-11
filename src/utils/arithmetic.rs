@@ -1,5 +1,6 @@
 use crate::field::{ExtField, Field};
 use itertools::Itertools;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub trait BatchInverse<F> {
     fn inverse(self) -> F;
@@ -81,5 +82,44 @@ pub(crate) fn interpolate<F: Field, EF: ExtField<F>>(points: &[F], evals: &[EF])
             );
         }
         final_poly
+    }
+}
+
+impl<V: Field> VecOps<V> for Vec<V> {}
+impl<V: Field> VecOps<V> for &[V] {}
+impl<V: Field> VecOps<V> for &mut [V] {}
+
+pub trait VecOps<F: Field>: core::ops::Deref<Target = [F]> {
+    fn hadamard<E: ExtField<F>>(&self, other: &[E]) -> Vec<E> {
+        assert_eq!(self.len(), other.len());
+        self.iter()
+            .zip_eq(other.iter())
+            .map(|(&a, &b)| b * a)
+            .collect()
+    }
+
+    fn dot<E: ExtField<F>>(&self, other: &[E]) -> E {
+        assert_eq!(self.len(), other.len());
+        self.iter().zip_eq(other.iter()).map(|(&a, &b)| b * a).sum()
+    }
+
+    fn par_hadamard<E: ExtField<F>>(&self, other: &[E]) -> Vec<E> {
+        assert_eq!(self.len(), other.len());
+        self.par_iter()
+            .zip_eq(other.par_iter())
+            .map(|(&a, &b)| b * a)
+            .collect()
+    }
+
+    fn par_dot<E: ExtField<F>>(&self, other: &[E]) -> E {
+        assert_eq!(self.len(), other.len());
+        self.par_iter()
+            .zip_eq(other.par_iter())
+            .map(|(&a, &b)| b * a)
+            .sum()
+    }
+
+    fn horner<E: ExtField<F>>(&self, x: E) -> E {
+        self.iter().rfold(E::ZERO, |acc, &coeff| acc * x + coeff)
     }
 }

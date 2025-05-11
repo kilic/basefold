@@ -113,7 +113,6 @@ where
         let k = comm.k() - 1;
         let el = comm.data[index];
         let mid = 1 << k;
-        let sb = comm.data[index ^ mid];
 
         transcript.write(el)?;
 
@@ -126,14 +125,14 @@ where
             transcript.unsafe_write(node)
         })?;
 
-        let pair = if index < mid { [el, sb] } else { [sb, el] };
         #[cfg(debug_assertions)]
         {
+            let sb = comm.data[index ^ mid];
+            let pair = if index < mid { [el, sb] } else { [sb, el] };
             let leaf = self.h.hash_iter(&pair);
             verify_merkle_proof(&self.c, comm.root(), index & (mid - 1), leaf, &witness).unwrap();
         }
 
-        // Ok(pair)
         Ok(el)
     }
 

@@ -1,4 +1,3 @@
-pub mod arithmetic;
 pub mod basefold;
 pub mod data;
 pub mod field;
@@ -18,7 +17,7 @@ pub(crate) mod test {
     use rand::{rngs::StdRng, SeedableRng};
 
     #[allow(dead_code)]
-    pub(crate) fn seed_rng() -> impl rand::Rng {
+    pub(crate) fn seed_rng() -> StdRng {
         StdRng::seed_from_u64(1)
     }
 

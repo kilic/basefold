@@ -37,8 +37,7 @@ impl<V> TwoAdicSlice<V> for Vec<V> {}
 impl<V> TwoAdicSlice<V> for &[V] {}
 impl<V> TwoAdicSlice<V> for &mut [V] {}
 
-#[tracing::instrument(skip_all)]
-// taken from a16z/jolt
+// copy from a16z/jolt
 pub(crate) fn unsafe_allocate_zero_vec<F: Default + Sized>(size: usize) -> Vec<F> {
     // https://stackoverflow.com/questions/59314686/how-to-efficiently-create-a-large-vector-of-items-initialized-to-the-same-value
 
@@ -64,3 +63,36 @@ pub(crate) fn unsafe_allocate_zero_vec<F: Default + Sized>(size: usize) -> Vec<F
     }
     result
 }
+
+// #[derive(Clone, Debug)]
+// pub struct LadderVec<F: Default + Copy> {
+//     layout: Vec<F>,
+// }
+
+// impl<F: Default + Copy> LadderVec<F> {
+//     pub fn new(k: usize) -> Self {
+//         let layout = unsafe_allocate_zero_vec((1 << (1 + k)) - 1);
+//         Self { layout }
+//     }
+
+//     pub fn k(&self) -> usize {
+//         log2_strict((self.layout.len() + 1) / 2)
+//     }
+
+//     pub fn last_row(&self) -> &[F] {
+//         self.row(self.k())
+//     }
+
+//     pub fn row(&self, i: usize) -> &[F] {
+//         let start = (1 << i) - 1;
+//         let end = (1 << (i + 1)) - 1;
+//         &self.layout[start..end]
+//     }
+
+//     pub fn update_row(&mut self, i: usize, row: &[F]) {
+//         assert_eq!(row.len(), 1 << i);
+//         let start = (1 << i) - 1;
+//         let end = (1 << (i + 1)) - 1;
+//         self.layout[start..end].copy_from_slice(row);
+//     }
+// }

@@ -119,10 +119,9 @@ where
         let k = comm.k();
         let row = comm.data.row(index).to_vec();
         transcript.unsafe_write_many(&row)?;
-        let leaf = self.h.hash_iter(&row);
 
         let mid = 1 << (k - 1);
-        let sb = comm.data.row(index ^ mid).to_vec();
+        let _sb = comm.data.row(index ^ mid).to_vec();
 
         let index = to_interleaved_index(comm.k(), index);
         let mut witness = vec![];
@@ -131,11 +130,11 @@ where
             .iter()
             .take(k)
             .enumerate()
-            .try_for_each(|(i, layer)| {
+            .try_for_each(|(_i, layer)| {
                 let node = layer[index_asc ^ 1];
                 #[cfg(debug_assertions)]
-                if i == 0 {
-                    assert_eq!(self.h.hash_iter(&sb), node);
+                if _i == 0 {
+                    assert_eq!(self.h.hash_iter(&_sb), node);
                 }
                 witness.push(node);
                 index_asc >>= 1;
@@ -143,7 +142,10 @@ where
             })?;
 
         #[cfg(debug_assertions)]
-        verify_merkle_proof(&self.c, comm.root(), index, leaf, &witness).unwrap();
+        {
+            let leaf = self.h.hash_iter(&row);
+            verify_merkle_proof(&self.c, comm.root(), index, leaf, &witness).unwrap();
+        }
 
         Ok(row)
     }

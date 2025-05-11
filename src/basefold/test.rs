@@ -1,16 +1,19 @@
 use crate::basefold::code::Basecode;
+use crate::basefold::sumcheck::{EqSumcheck, Pointcheck, SumcheckProver};
 use crate::basefold::Basefold;
 use crate::data::MatrixOwn;
+use crate::field::{ExtField, Field};
 use crate::hash::rust_crypto::{RustCrypto, RustCryptoReader, RustCryptoWriter};
 use crate::hash::transcript::{Challenge, Reader};
 use crate::merkle::MerkleTree;
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
 use rand::Rng;
 
-#[test]
-fn test_pcs() {
-    type F = crate::field::goldilocks::Goldilocks;
-    type Ext = crate::field::goldilocks::Goldilocks2;
-
+fn run_basefold<F: Field, Ext: ExtField<F>, Sumcheck: SumcheckProver<F, Ext>>(cfg: Sumcheck::Cfg)
+where
+    Standard: Distribution<F> + Distribution<Ext>,
+{
     type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
     type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
     type Hasher = RustCrypto<sha3::Keccak256>;
@@ -23,7 +26,6 @@ fn test_pcs() {
     let k0 = 3;
     let width = 3;
     let n_test = 22;
-    let num_points = 10;
 
     let mut rng = crate::test::seed_rng();
     let code = Basecode::<F>::generate(&mut rng, n_vars, k0, c);
@@ -38,12 +40,10 @@ fn test_pcs() {
     let mut transcript = Writer::init("");
     let comm = basefold.commit::<_>(&mut transcript, &data).unwrap();
 
-    let points = (0..num_points)
-        .map(|_| (0..n_vars).map(|_| rng.gen()).collect::<Vec<Ext>>())
-        .collect::<Vec<_>>();
-    let points = points.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let zs = (0..n_vars).map(|_| rng.gen()).collect::<Vec<Ext>>();
+    let mut sp = Sumcheck::new(&zs, &data, cfg);
     basefold
-        .open(&mut transcript, &points, &data, &comm)
+        .open(&mut transcript, &mut sp, &zs, &data, &comm)
         .unwrap();
     let checkpoint0: F = transcript.draw();
 
@@ -52,8 +52,16 @@ fn test_pcs() {
 
     let comm: [u8; 32] = transcript.read().unwrap();
     basefold
-        .verify(comm, width, &mut transcript, &points)
+        .verify::<_, Sumcheck::Verifier>(&mut transcript, comm, width, &zs)
         .unwrap();
     let checkpoint1: F = transcript.draw();
     assert_eq!(checkpoint0, checkpoint1);
+}
+
+#[test]
+fn test_pcs() {
+    type F = crate::field::goldilocks::Goldilocks;
+    type Ext = crate::field::goldilocks::Goldilocks2;
+    run_basefold::<F, Ext, EqSumcheck<F, Ext>>(2);
+    run_basefold::<F, Ext, Pointcheck<F, Ext>>(2);
 }
