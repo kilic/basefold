@@ -191,7 +191,6 @@ mod test {
     }
 
     impl<F: Field, Ext: ExtField<F>> super::PointcheckVerifier<F, Ext> {
-        #[tracing::instrument(skip_all)]
         fn run_verifier<Transcript>(
             &mut self,
             transcript: &mut Transcript,

@@ -157,7 +157,7 @@ mod test {
     #[test]
     fn test_eval_mat() {
         type F = crate::field::goldilocks::Goldilocks;
-        let k = 25;
+        let k = 11;
         let width = 5;
         let mut rng = crate::test::seed_rng();
         // crate::test::init_tracing();

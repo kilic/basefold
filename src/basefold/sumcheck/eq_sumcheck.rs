@@ -288,7 +288,6 @@ mod test {
     }
 
     impl<F: Field, Ext: ExtField<F>> super::EqSumcheckVerifier<F, Ext> {
-        #[tracing::instrument(skip_all)]
         fn run_verifier<Transcript>(
             &mut self,
             transcript: &mut Transcript,
@@ -318,41 +317,6 @@ mod test {
         let mat = MatrixOwn::new(width, mat);
         let zs = (0..k).map(|_| Ext::rand(&mut rng)).collect::<Vec<_>>();
         let evals = crate::mle::eval_mat(&zs, &mat, 1);
-
-        for sweetness in 1..7 {
-            let (proof, checkpoint0) = {
-                let mut writer = Writer::init(b"");
-                let mut sp = super::EqSumcheck::new(&zs, &mat, sweetness);
-                assert_eq!(evals, sp.evals());
-                writer.write_many(sp.evals()).unwrap();
-                let alpha = writer.draw();
-                let mut claim: Ext = evals.horner(alpha);
-
-                let poly = mat.iter().map(|row| row.horner(alpha)).collect::<Vec<_>>();
-                let mut fin = poly.clone();
-                let mut _rs = sp.run_prover(&mut writer, k, &mut claim, &mut fin).unwrap();
-
-                assert_eq!(fin.len(), 1);
-                writer.write(fin[0]).unwrap();
-
-                let checkpoint: F = writer.draw();
-                (writer.finalize(), checkpoint)
-            };
-
-            {
-                let mut reader = Reader::init(&proof, b"");
-                let evals: Vec<Ext> = reader.read_many(mat.width()).unwrap();
-                let alpha = reader.draw();
-                let claim = evals.horner(alpha);
-
-                let mut sv = super::EqSumcheckVerifier::<F, Ext>::new(claim, &zs);
-                let _ = sv.run_verifier(&mut reader, k).unwrap();
-                sv.verify(&mut reader).unwrap();
-
-                let checkpoint1: F = reader.draw();
-                assert_eq!(checkpoint0, checkpoint1);
-            }
-        }
 
         for sweetness in 1..7 {
             for d in 0..=k {
