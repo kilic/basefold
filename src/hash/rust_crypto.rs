@@ -210,9 +210,11 @@ impl<R: Read, D: Digest + FixedOutputReset> Reader<[u8; 32]> for RustCryptoReade
 }
 
 #[cfg(test)]
-fn transcript_test<F: Field, D: Digest + FixedOutputReset>() {
+fn transcript_test<F: Field + FromUniformBytes, D: Digest + FixedOutputReset>()
+where
+    rand::distr::StandardUniform: rand::distr::Distribution<F>,
+{
     use rand::Rng;
-    type F = p3_goldilocks::Goldilocks;
 
     let mut rng = crate::test::seed_rng();
     let a0: F = rng.random();
@@ -245,6 +247,10 @@ fn transcript_test<F: Field, D: Digest + FixedOutputReset>() {
 
 #[test]
 fn test_transcript() {
-    transcript_test::<p3_goldilocks::Goldilocks, sha2::Sha256>();
-    transcript_test::<p3_goldilocks::Goldilocks, sha3::Keccak256>();
+    use p3_field::extension::BinomialExtensionField;
+    use p3_goldilocks::Goldilocks;
+    transcript_test::<Goldilocks, sha2::Sha256>();
+    transcript_test::<Goldilocks, sha3::Keccak256>();
+    transcript_test::<BinomialExtensionField<Goldilocks, 2>, sha2::Sha256>();
+    transcript_test::<BinomialExtensionField<Goldilocks, 2>, sha3::Keccak256>();
 }

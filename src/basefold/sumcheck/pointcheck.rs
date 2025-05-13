@@ -11,8 +11,8 @@ use crate::{
 use super::{SumcheckProver, SumcheckVerifier};
 
 pub struct Pointcheck<F: Field, Ext: ExtensionField<F>> {
-    eq_lad0: Vec<Vec<Ext>>,
-    eq_lad1: Vec<Vec<Ext>>,
+    eq_tree0: Vec<Vec<Ext>>,
+    eq_tree1: Vec<Vec<Ext>>,
     zs_inv: Vec<Ext>,
     round: usize,
     evals: Vec<Ext>,
@@ -72,16 +72,19 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
     type Cfg = usize;
     type Verifier = PointcheckVerifier<F, Ext>;
 
+    // * Evaluate matrix
+    // * Store partial EQ trees in order to reuse them in pointcheck rounds
     fn new(zs: &[Ext], mat: &MatrixOwn<F>, sweetness: usize) -> Self {
         let (eq_lad0, mut eq_lad1, evals) =
             tracing::info_span!("eval", s = sweetness).in_scope(|| {
                 let (z0, z1) = zs.split_at(mat.k() - sweetness);
 
-                let eq_lad0 = crate::mle::eq_ladder(z0, Ext::ONE);
-                let eq_lad1 = crate::mle::eq_ladder(z1, Ext::ONE);
+                let eq_tree0 = crate::mle::eq_tree(z0, Ext::ONE);
+                let eq_tree1 = crate::mle::eq_tree(z1, Ext::ONE);
 
-                let eq0 = eq_lad0.last().unwrap();
-                let eq1 = eq_lad1.last().unwrap();
+                // Last elements of partial eq trees is used to evaluate the matrix
+                let eq0 = eq_tree0.last().unwrap();
+                let eq1 = eq_tree1.last().unwrap();
 
                 let evals = (0..mat.width())
                     .map(|col| {
@@ -98,9 +101,10 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
                     })
                     .collect();
 
-                (eq_lad0, eq_lad1, evals)
+                (eq_tree0, eq_tree1, evals)
             });
 
+        // Last element of tailing eq tree is not required in pointcheck, so we dump it
         eq_lad1.pop();
 
         let mut zs_inv = zs.to_vec();
@@ -108,8 +112,8 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
 
         Self {
             zs_inv,
-            eq_lad0,
-            eq_lad1,
+            eq_tree0: eq_lad0,
+            eq_tree1: eq_lad1,
             round: 0,
             evals,
             _marker: std::marker::PhantomData,
@@ -120,6 +124,9 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
         &self.evals
     }
 
+    // In the first round `poly` is assumed to be compressed matrix that is used
+    // when creating new instance of `EqSumcheck`. Similarly `claim` is the
+    // compressed claim.
     fn round<Transcript>(
         &mut self,
         transcript: &mut Transcript,
@@ -132,14 +139,14 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
         let k = poly.k() - 1;
 
         let (p0, _) = poly.split_at_mut(1 << k);
-        let a0 = if !self.eq_lad1.is_empty() {
-            let eq1 = &self.eq_lad1.pop().unwrap();
+        let a0 = if !self.eq_tree1.is_empty() {
+            let eq1 = &self.eq_tree1.pop().unwrap();
 
             // if eq1 exhausted, drain eq0
-            let eq0 = if self.eq_lad1.is_empty() {
-                &self.eq_lad0.pop().unwrap()
+            let eq0 = if self.eq_tree1.is_empty() {
+                &self.eq_tree0.pop().unwrap()
             } else {
-                self.eq_lad0.last().unwrap()
+                self.eq_tree0.last().unwrap()
             };
 
             p0.chunks(eq0.len())
@@ -147,7 +154,7 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
                 .map(|(part, &c)| part.par_dot(eq0) * c)
                 .sum()
         } else {
-            p0.par_dot(&self.eq_lad0.pop().unwrap())
+            p0.par_dot(&self.eq_tree0.pop().unwrap())
         };
 
         let a1 = (*claim - a0) * self.zs_inv[k];

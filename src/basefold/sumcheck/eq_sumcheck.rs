@@ -26,63 +26,6 @@ pub struct EqSumcheck<F: Field, Ext: ExtensionField<F>> {
     _phantom: std::marker::PhantomData<F>,
 }
 
-pub struct EqSumcheckVerifier<F: Field, Ext: ExtensionField<F>> {
-    rs: Vec<Ext>,
-    claim: Ext,
-    zs: Vec<Ext>,
-    _phantom: std::marker::PhantomData<F>,
-}
-
-impl<F: Field, Ext: ExtensionField<F>> EqSumcheckVerifier<F, Ext> {}
-
-impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVerifier<F, Ext> {
-    fn new(claim: Ext, zs: &[Ext]) -> Self {
-        Self {
-            claim,
-            zs: zs.to_vec(),
-            rs: Vec::new(),
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
-    fn reduce_claim<Transcript>(&mut self, reader: &mut Transcript) -> Result<Ext, crate::Error>
-    where
-        Transcript: Reader<Ext> + Challenge<Ext>,
-    {
-        let v0: Ext = reader.read()?;
-        let v2 = reader.read()?;
-        let v = vec![v0, self.claim - v0, v2];
-        let r: Ext = reader.draw();
-        self.claim = extrapolate(&v, r);
-        self.rs.push(r);
-        Ok(r)
-    }
-
-    fn verify<Transcript>(
-        self,
-        reader: &mut Transcript,
-    ) -> Result<(Vec<Ext>, Vec<Ext>), crate::Error>
-    where
-        Transcript: Reader<Ext> + Challenge<Ext>,
-    {
-        let k = self.zs.len();
-        let n = k - self.rs.len();
-        let fin: Vec<Ext> = reader.read_many(1 << n).unwrap();
-
-        let (z_fin, z_eq) = self.zs.split_at(n);
-        let mut rs = self.rs.clone();
-        rs.reverse();
-        let eq = crate::mle::eval_eq_xy(z_eq, &rs);
-        let fe = crate::mle::eval_poly(z_fin, &fin);
-
-        (fe * eq == self.claim)
-            .then_some(())
-            .ok_or(crate::Error::Verify)?;
-
-        Ok((fin, self.rs))
-    }
-}
-
 impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
     fn round_chunked<Transcript>(
         &mut self,
@@ -192,6 +135,8 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
     type Cfg = usize;
     type Verifier = EqSumcheckVerifier<F, Ext>;
 
+    // * Evaluate matrix
+    // * Store partial EQs to reuse them in sumcheck rounds
     fn new(zs: &[Ext], mat: &MatrixOwn<F>, sweetness: usize) -> Self {
         let k = mat.k();
         assert_eq!(k, zs.len());
@@ -233,6 +178,9 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
         &self.evals
     }
 
+    // In the first round `poly` is assumed to be compressed matrix that is used
+    // when creating new instance of `EqSumcheck`. Similarly `claim` is the
+    // compressed claim.
     fn round<Transcript>(
         &mut self,
         transcript: &mut Transcript,
@@ -249,6 +197,61 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
         } else {
             self.round_nonchunked(transcript, claim, poly)
         }
+    }
+}
+
+pub struct EqSumcheckVerifier<F: Field, Ext: ExtensionField<F>> {
+    rs: Vec<Ext>,
+    claim: Ext,
+    zs: Vec<Ext>,
+    _phantom: std::marker::PhantomData<F>,
+}
+
+impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVerifier<F, Ext> {
+    fn new(claim: Ext, zs: &[Ext]) -> Self {
+        Self {
+            claim,
+            zs: zs.to_vec(),
+            rs: Vec::new(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    fn reduce_claim<Transcript>(&mut self, reader: &mut Transcript) -> Result<Ext, crate::Error>
+    where
+        Transcript: Reader<Ext> + Challenge<Ext>,
+    {
+        let v0: Ext = reader.read()?;
+        let v2 = reader.read()?;
+        let v = vec![v0, self.claim - v0, v2];
+        let r: Ext = reader.draw();
+        self.claim = extrapolate(&v, r);
+        self.rs.push(r);
+        Ok(r)
+    }
+
+    fn verify<Transcript>(
+        self,
+        reader: &mut Transcript,
+    ) -> Result<(Vec<Ext>, Vec<Ext>), crate::Error>
+    where
+        Transcript: Reader<Ext> + Challenge<Ext>,
+    {
+        let k = self.zs.len();
+        let n = k - self.rs.len();
+        let fin: Vec<Ext> = reader.read_many(1 << n).unwrap();
+
+        let (z_fin, z_eq) = self.zs.split_at(n);
+        let mut rs = self.rs.clone();
+        rs.reverse();
+        let eq = crate::mle::eval_eq_xy(z_eq, &rs);
+        let fe = crate::mle::eval_poly(z_fin, &fin);
+
+        (fe * eq == self.claim)
+            .then_some(())
+            .ok_or(crate::Error::Verify)?;
+
+        Ok((fin, self.rs))
     }
 }
 

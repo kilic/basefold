@@ -28,7 +28,7 @@ pub fn eq_scaled<F: Field>(zs: &[F], scale: F) -> Vec<F> {
     eq
 }
 
-pub fn eq_ladder<F: Field>(zs: &[F], scale: F) -> Vec<Vec<F>> {
+pub fn eq_tree<F: Field>(zs: &[F], scale: F) -> Vec<Vec<F>> {
     let k = zs.len();
     let mut eq = unsafe_allocate_zero_vec(1 << k);
     eq[0] = scale;
