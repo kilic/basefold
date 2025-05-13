@@ -1,15 +1,15 @@
 pub mod eq_sumcheck;
 pub mod pointcheck;
 pub use eq_sumcheck::*;
+use p3_field::{ExtensionField, Field};
 pub use pointcheck::*;
 
 use crate::{
     data::MatrixOwn,
-    field::{ExtField, Field},
     hash::transcript::{Challenge, Reader, Writer},
 };
 
-pub trait SumcheckVerifier<F: Field, Ext: ExtField<F>> {
+pub trait SumcheckVerifier<F: Field, Ext: ExtensionField<F>> {
     fn new(claim: Ext, zs: &[Ext]) -> Self;
     fn reduce_claim<Transcript>(
         &mut self,
@@ -25,7 +25,7 @@ pub trait SumcheckVerifier<F: Field, Ext: ExtField<F>> {
         Transcript: Reader<Ext> + Challenge<Ext>;
 }
 
-pub trait SumcheckProver<F: Field, Ext: ExtField<F>>: Sized {
+pub trait SumcheckProver<F: Field, Ext: ExtensionField<F>>: Sized {
     type Cfg;
     type Verifier: SumcheckVerifier<F, Ext>;
     fn new(zs: &[Ext], mat: &MatrixOwn<F>, cfg: Self::Cfg) -> Self;

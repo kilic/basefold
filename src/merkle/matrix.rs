@@ -179,12 +179,13 @@ mod test {
             transcript::Reader,
         },
         merkle::{matrix::MatrixCommitment, MerkleTree},
+        utils::n_rand,
     };
-    use rand::Rng;
+    use p3_goldilocks::Goldilocks;
 
     #[test]
     fn test_mat_com() {
-        type F = crate::field::goldilocks::Goldilocks;
+        type F = Goldilocks;
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
         type Hasher = RustCrypto<sha3::Keccak256>;
@@ -198,7 +199,7 @@ mod test {
         let k = 3;
         let width = 1;
         let mut rng = crate::test::seed_rng();
-        let coeffs = (0..(1 << k) * width).map(|_| rng.gen()).collect::<Vec<F>>();
+        let coeffs = n_rand(&mut rng, 1 << k);
         let data = MatrixOwn::new(width, coeffs);
         let comm_data = mat_comm.commit(&mut transcript, data).unwrap();
         (0..1 << k).for_each(|index| {

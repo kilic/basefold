@@ -1,5 +1,6 @@
+use p3_field::Field;
+
 use crate::{
-    field::Field,
     hash::{Compress, Hasher},
     Error,
 };

@@ -1,23 +1,23 @@
 use itertools::Itertools;
+use p3_field::{ExtensionField, Field};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     data::MatrixOwn,
-    field::{ExtField, Field},
     hash::transcript::{Challenge, Reader, Writer},
     utils::{interpolate, TwoAdicSlice, VecOps},
 };
 
 use super::{SumcheckProver, SumcheckVerifier};
 
-fn extrapolate<F: Field, EF: ExtField<F>>(evals: &[F], target: EF) -> EF {
+fn extrapolate<F: Field, EF: ExtensionField<F>>(evals: &[F], target: EF) -> EF {
     let points = (0..evals.len())
-        .map(|i| F::from(i as u64))
+        .map(|i| F::from_usize(i))
         .collect::<Vec<_>>();
     interpolate(&points, evals).horner(target)
 }
 
-pub struct EqSumcheck<F: Field, Ext: ExtField<F>> {
+pub struct EqSumcheck<F: Field, Ext: ExtensionField<F>> {
     eq0: Vec<Ext>,
     eq1: Vec<Ext>,
     round: usize,
@@ -26,16 +26,16 @@ pub struct EqSumcheck<F: Field, Ext: ExtField<F>> {
     _phantom: std::marker::PhantomData<F>,
 }
 
-pub struct EqSumcheckVerifier<F: Field, Ext: ExtField<F>> {
+pub struct EqSumcheckVerifier<F: Field, Ext: ExtensionField<F>> {
     rs: Vec<Ext>,
     claim: Ext,
     zs: Vec<Ext>,
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: Field, Ext: ExtField<F>> EqSumcheckVerifier<F, Ext> {}
+impl<F: Field, Ext: ExtensionField<F>> EqSumcheckVerifier<F, Ext> {}
 
-impl<F: Field, Ext: ExtField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVerifier<F, Ext> {
+impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVerifier<F, Ext> {
     fn new(claim: Ext, zs: &[Ext]) -> Self {
         Self {
             claim,
@@ -83,7 +83,7 @@ impl<F: Field, Ext: ExtField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVerifier
     }
 }
 
-impl<F: Field, Ext: ExtField<F>> EqSumcheck<F, Ext> {
+impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
     fn round_chunked<Transcript>(
         &mut self,
         transcript: &mut Transcript,
@@ -188,7 +188,7 @@ impl<F: Field, Ext: ExtField<F>> EqSumcheck<F, Ext> {
     }
 }
 
-impl<F: Field, Ext: ExtField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, Ext> {
+impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, Ext> {
     type Cfg = usize;
     type Verifier = EqSumcheckVerifier<F, Ext>;
 
@@ -255,21 +255,19 @@ impl<F: Field, Ext: ExtField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, Ext> {
 #[cfg(test)]
 mod test {
 
+    use p3_field::{extension::BinomialExtensionField, ExtensionField, Field};
+
     use crate::{
         basefold::sumcheck::{SumcheckProver, SumcheckVerifier},
         data::MatrixOwn,
-        field::{
-            goldilocks::{Goldilocks, Goldilocks2},
-            ExtField, Field,
-        },
         hash::{
             rust_crypto::{RustCryptoReader, RustCryptoWriter},
             transcript::{Challenge, Reader, Writer},
         },
-        utils::VecOps,
+        utils::{n_rand, VecOps},
     };
 
-    impl<F: Field, Ext: ExtField<F>> super::EqSumcheck<F, Ext> {
+    impl<F: Field, Ext: ExtensionField<F>> super::EqSumcheck<F, Ext> {
         #[tracing::instrument(skip_all)]
         fn run_prover<Transcript>(
             &mut self,
@@ -287,7 +285,7 @@ mod test {
         }
     }
 
-    impl<F: Field, Ext: ExtField<F>> super::EqSumcheckVerifier<F, Ext> {
+    impl<F: Field, Ext: ExtensionField<F>> super::EqSumcheckVerifier<F, Ext> {
         fn run_verifier<Transcript>(
             &mut self,
             transcript: &mut Transcript,
@@ -302,8 +300,9 @@ mod test {
 
     #[test]
     fn test_eq_sumcheck() {
-        type F = Goldilocks;
-        type Ext = Goldilocks2;
+        type F = p3_goldilocks::Goldilocks;
+        type Ext = BinomialExtensionField<F, 2>;
+
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
 
@@ -311,11 +310,10 @@ mod test {
         let mut rng = crate::test::seed_rng();
         let k = 11;
         let width = 2;
-        let mat = (0..width * (1 << k))
-            .map(|_| F::rand(&mut rng))
-            .collect::<Vec<_>>();
+
+        let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
-        let zs = (0..k).map(|_| Ext::rand(&mut rng)).collect::<Vec<_>>();
+        let zs = n_rand(&mut rng, k);
         let evals = crate::mle::eval_mat(&zs, &mat, 1);
 
         for sweetness in 1..7 {

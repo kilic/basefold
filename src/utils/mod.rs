@@ -1,6 +1,3 @@
-use itertools::Itertools;
-use rand::{distributions::Standard, prelude::Distribution, RngCore};
-
 pub mod arithmetic;
 pub use arithmetic::*;
 
@@ -11,12 +8,16 @@ macro_rules! split128 {
     };
 }
 
-pub fn n_rand<F>(mut rng: impl RngCore, n: usize) -> Vec<F>
+#[cfg(test)]
+pub(crate) fn n_rand<F>(mut rng: impl rand::RngCore, n: usize) -> Vec<F>
 where
-    Standard: Distribution<F>,
+    rand::distr::StandardUniform: rand::distr::Distribution<F>,
 {
+    use itertools::Itertools;
     use rand::Rng;
-    std::iter::repeat_with(|| rng.gen()).take(n).collect_vec()
+    std::iter::repeat_with(|| rng.random())
+        .take(n)
+        .collect_vec()
 }
 
 #[inline(always)]

@@ -1,6 +1,7 @@
-use crate::field::Field;
+use crate::field::FromUniformBytes;
 use crate::Error;
 use digest::{Digest, FixedOutputReset, Output};
+use p3_field::Field;
 use std::io::{Read, Write};
 
 use super::transcript::{Challenge, ChallengeBits, Reader, Writer};
@@ -18,9 +19,9 @@ impl<D: Digest> RustCrypto<D> {
         }
     }
 
-    pub(crate) fn result_to_field<F: Field>(out: &Output<D>) -> F {
+    pub(crate) fn result_to_field<F: Field + FromUniformBytes>(out: &Output<D>) -> F {
         let out = out.iter().rev().cloned().collect::<Vec<_>>();
-        F::from_uniform_bytes(&out)
+        F::from_bytes(&out)
     }
 
     pub(crate) fn result_to_bits(out: &Output<D>, bit_size: usize) -> usize {
@@ -36,7 +37,7 @@ impl<D: Digest + FixedOutputReset> RustCrypto<D> {
         ret
     }
 
-    pub(crate) fn draw_field_element<F: Field>(h: &mut D) -> F {
+    pub(crate) fn draw_field_element<F: FromUniformBytes>(h: &mut D) -> F {
         let ret = Self::cycle(h);
         RustCrypto::<D>::result_to_field(&ret)
     }
@@ -47,7 +48,9 @@ impl<D: Digest + FixedOutputReset> RustCrypto<D> {
     }
 }
 
-impl<D: Digest + FixedOutputReset + Send + Sync, F: Field> Hasher<F, [u8; 32]> for RustCrypto<D> {
+impl<D: Digest + FixedOutputReset + Send + Sync, F: FromUniformBytes> Hasher<F, [u8; 32]>
+    for RustCrypto<D>
+{
     fn hash(&self, input: &[F]) -> [u8; 32] {
         let mut h = D::new();
         input
@@ -70,7 +73,7 @@ impl<D: Digest + FixedOutputReset + Send + Sync, const N: usize> Compress<[u8; 3
 #[derive(Debug, Clone)]
 pub struct RustCryptoWriter<W: Write, D: Digest + FixedOutputReset> {
     h: D,
-    writer: W,
+    pub(crate) writer: W,
 }
 
 impl<W: Write + Default, D: Digest + FixedOutputReset> RustCryptoWriter<W, D> {
@@ -87,12 +90,14 @@ impl<W: Write, D: Digest + FixedOutputReset> RustCryptoWriter<W, D> {
         self.writer
     }
 
-    fn update(&mut self, data: impl AsRef<[u8]>) {
+    pub fn update(&mut self, data: impl AsRef<[u8]>) {
         Digest::update(&mut self.h, data);
     }
 }
 
-impl<W: Write, D: Digest + FixedOutputReset, F: Field> Writer<F> for RustCryptoWriter<W, D> {
+impl<W: Write, D: Digest + FixedOutputReset, F: FromUniformBytes> Writer<F>
+    for RustCryptoWriter<W, D>
+{
     fn unsafe_write(&mut self, e: F) -> Result<(), Error> {
         let data = e.to_bytes();
         self.writer
@@ -123,17 +128,9 @@ impl<W: Write, D: Digest + FixedOutputReset> Writer<[u8; 32]> for RustCryptoWrit
     }
 }
 
-impl<W: Write, D: Digest + FixedOutputReset, F: Field> Writer<&[F]> for RustCryptoWriter<W, D> {
-    fn unsafe_write(&mut self, e: &[F]) -> Result<(), Error> {
-        self.unsafe_write_many(e)
-    }
-
-    fn write(&mut self, e: &[F]) -> Result<(), Error> {
-        self.write_many(e)
-    }
-}
-
-impl<W: Write, D: Digest + FixedOutputReset, F: Field> Challenge<F> for RustCryptoWriter<W, D> {
+impl<W: Write, D: Digest + FixedOutputReset, F: FromUniformBytes> Challenge<F>
+    for RustCryptoWriter<W, D>
+{
     fn draw(&mut self) -> F {
         RustCrypto::draw_field_element(&mut self.h)
     }
@@ -164,7 +161,9 @@ impl<R: Read, D: Digest + FixedOutputReset> RustCryptoReader<R, D> {
     }
 }
 
-impl<R: Read, D: Digest + FixedOutputReset, F: Field> Challenge<F> for RustCryptoReader<R, D> {
+impl<R: Read, D: Digest + FixedOutputReset, F: FromUniformBytes> Challenge<F>
+    for RustCryptoReader<R, D>
+{
     fn draw(&mut self) -> F {
         RustCrypto::draw_field_element(&mut self.h)
     }
@@ -176,13 +175,15 @@ impl<R: Read, D: Digest + FixedOutputReset> ChallengeBits for RustCryptoReader<R
     }
 }
 
-impl<R: Read, D: Digest + FixedOutputReset, F: Field> Reader<F> for RustCryptoReader<R, D> {
+impl<R: Read, D: Digest + FixedOutputReset, F: FromUniformBytes> Reader<F>
+    for RustCryptoReader<R, D>
+{
     fn unsafe_read(&mut self) -> Result<F, Error> {
         let mut data = vec![0u8; F::NUM_BYTES];
         self.reader
             .read_exact(data.as_mut())
             .map_err(|_| Error::Transcript)?;
-        F::from_bytes(&data).ok_or(Error::Transcript)
+        Ok(F::from_bytes(&data))
     }
 
     fn read(&mut self) -> Result<F, Error> {
@@ -208,18 +209,16 @@ impl<R: Read, D: Digest + FixedOutputReset> Reader<[u8; 32]> for RustCryptoReade
     }
 }
 
-#[test]
-fn test_transcript() {
-    use crate::field::goldilocks::Goldilocks;
+#[cfg(test)]
+fn transcript_test<F: Field, D: Digest + FixedOutputReset>() {
     use rand::Rng;
-    type F = Goldilocks;
-    type Writer = RustCryptoWriter<Vec<u8>, sha2::Sha256>;
-    type Reader<'a> = RustCryptoReader<&'a [u8], sha2::Sha256>;
+    type F = p3_goldilocks::Goldilocks;
 
-    let a0: F = rand_core::OsRng.gen();
-    let b0: F = rand_core::OsRng.gen();
-    let c0: F = rand_core::OsRng.gen();
-    let mut w = Writer::init("");
+    let mut rng = crate::test::seed_rng();
+    let a0: F = rng.random();
+    let b0: F = rng.random();
+    let c0: F = rng.random();
+    let mut w = RustCryptoWriter::<Vec<u8>, D>::init("");
 
     w.write(a0).unwrap();
     w.write(b0).unwrap();
@@ -230,7 +229,7 @@ fn test_transcript() {
     let i0 = ChallengeBits::draw(&mut w, 8);
 
     let stream = w.finalize();
-    let mut r = Reader::init(&stream, "");
+    let mut r = RustCryptoReader::<&[u8], D>::init(&stream, "");
     let _: F = r.read().unwrap();
     let _: F = r.read().unwrap();
     let _: F = Challenge::<F>::draw(&mut r);
@@ -245,37 +244,7 @@ fn test_transcript() {
 }
 
 #[test]
-fn test_keccak() {
-    use crate::field::goldilocks::Goldilocks;
-    use rand::Rng;
-    type F = Goldilocks;
-    type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
-    type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
-
-    let a0: F = rand_core::OsRng.gen();
-    let b0: F = rand_core::OsRng.gen();
-    let c0: F = rand_core::OsRng.gen();
-    let mut w = Writer::init("");
-
-    w.write(a0).unwrap();
-    w.write(b0).unwrap();
-    let _: F = Challenge::<F>::draw(&mut w);
-    w.write(c0).unwrap();
-    let u0: F = Challenge::<F>::draw(&mut w);
-    w.write(a0).unwrap();
-    let i0 = ChallengeBits::draw(&mut w, 8);
-
-    let stream = w.finalize();
-    let mut r = Reader::init(&stream, "");
-    let _: F = r.read().unwrap();
-    let _: F = r.read().unwrap();
-    let _: F = Challenge::<F>::draw(&mut r);
-    let _: F = r.read().unwrap();
-    let u1: F = Challenge::<F>::draw(&mut r);
-    let a1: F = r.read().unwrap();
-    let i1 = ChallengeBits::draw(&mut r, 8);
-
-    assert_eq!(u0, u1);
-    assert_eq!(i0, i1);
-    assert_eq!(a0, a1);
+fn test_transcript() {
+    transcript_test::<p3_goldilocks::Goldilocks, sha2::Sha256>();
+    transcript_test::<p3_goldilocks::Goldilocks, sha3::Keccak256>();
 }

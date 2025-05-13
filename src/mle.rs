@@ -1,9 +1,9 @@
 use crate::{
     data::MatrixOwn,
-    field::{ExtField, Field},
     utils::{unsafe_allocate_zero_vec, TwoAdicSlice, VecOps},
 };
 use itertools::Itertools;
+use p3_field::{ExtensionField, Field};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
@@ -112,7 +112,7 @@ pub fn eval_poly_sweet<F: Field>(zs: &[F], poly: &[F], sweetness: usize) -> F {
         .sum()
 }
 
-pub fn eval_mat<F: Field, E: ExtField<F>>(
+pub fn eval_mat<F: Field, E: ExtensionField<F>>(
     zs: &[E],
     mat: &MatrixOwn<F>,
     sweetness: usize,
@@ -147,25 +147,25 @@ pub fn eval_eq_xy<F: Field>(x: &[F], y: &[F]) -> F {
 
 #[cfg(test)]
 mod test {
+    use p3_goldilocks::Goldilocks;
+    use rand::Rng;
+
     use crate::{
         data::MatrixOwn,
-        field::Field,
         mle::{eval_mat, eval_poly_sweet},
-        utils::VecOps,
+        utils::{n_rand, VecOps},
     };
 
     #[test]
     fn test_eval_mat() {
-        type F = crate::field::goldilocks::Goldilocks;
+        type F = Goldilocks;
         let k = 11;
         let width = 5;
         let mut rng = crate::test::seed_rng();
         // crate::test::init_tracing();
 
-        let zs = (0..k).map(|_| F::rand(&mut rng)).collect::<Vec<_>>();
-        let mat = (0..(1 << k) * width)
-            .map(|_| F::rand(&mut rng))
-            .collect::<Vec<_>>();
+        let zs: Vec<F> = n_rand(&mut rng, k);
+        let mat: Vec<F> = n_rand(&mut rng, (1 << k) * width);
         let mat = MatrixOwn::new(width, mat);
 
         let cols = mat.columns();
@@ -179,13 +179,13 @@ mod test {
 
     #[test]
     fn test_eval() {
-        type F = crate::field::goldilocks::Goldilocks;
+        type F = Goldilocks;
         let k = 4;
         let mut rng = crate::test::seed_rng();
-
         // crate::test::init_tracing();
-        let zs = (0..k).map(|_| F::rand(&mut rng)).collect::<Vec<_>>();
-        let poly = (0..1 << k).map(|_| F::rand(&mut rng)).collect::<Vec<_>>();
+
+        let zs: Vec<F> = n_rand(&mut rng, k);
+        let poly: Vec<F> = n_rand(&mut rng, 1 << k);
 
         let e0 = super::eval_poly(&zs, &poly);
         for sweetness in 0..k {
@@ -197,7 +197,7 @@ mod test {
         let e1 = poly.dot(&eq);
         assert_eq!(e0, e1);
 
-        let beta = F::rand(&mut rng);
+        let beta = rng.random();
         let eq = super::eq_scaled(&zs, beta);
         let e1 = poly.dot(&eq);
         assert_eq!(e0 * beta, e1);

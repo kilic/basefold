@@ -1,16 +1,16 @@
 use itertools::Itertools;
+use p3_field::{ExtensionField, Field};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     data::MatrixOwn,
-    field::{ExtField, Field},
     hash::transcript::{Challenge, Reader, Writer},
     utils::{BatchInverse, TwoAdicSlice, VecOps},
 };
 
 use super::{SumcheckProver, SumcheckVerifier};
 
-pub struct Pointcheck<F: Field, Ext: ExtField<F>> {
+pub struct Pointcheck<F: Field, Ext: ExtensionField<F>> {
     eq_lad0: Vec<Vec<Ext>>,
     eq_lad1: Vec<Vec<Ext>>,
     zs_inv: Vec<Ext>,
@@ -19,14 +19,14 @@ pub struct Pointcheck<F: Field, Ext: ExtField<F>> {
     _marker: std::marker::PhantomData<F>,
 }
 
-pub struct PointcheckVerifier<F: Field, Ext: ExtField<F>> {
+pub struct PointcheckVerifier<F: Field, Ext: ExtensionField<F>> {
     rs: Vec<Ext>,
     zs: Vec<Ext>,
     claim: Ext,
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: Field, Ext: ExtField<F>> SumcheckVerifier<F, Ext> for PointcheckVerifier<F, Ext> {
+impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for PointcheckVerifier<F, Ext> {
     fn new(claim: Ext, zs: &[Ext]) -> Self {
         Self {
             rs: vec![],
@@ -68,7 +68,7 @@ impl<F: Field, Ext: ExtField<F>> SumcheckVerifier<F, Ext> for PointcheckVerifier
     }
 }
 
-impl<F: Field, Ext: ExtField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
+impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
     type Cfg = usize;
     type Verifier = PointcheckVerifier<F, Ext>;
 
@@ -164,15 +164,16 @@ impl<F: Field, Ext: ExtField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
 #[cfg(test)]
 mod test {
 
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{ExtensionField, Field};
+
     use crate::basefold::sumcheck::{SumcheckProver, SumcheckVerifier};
     use crate::data::MatrixOwn;
-    use crate::field::goldilocks::{Goldilocks, Goldilocks2};
-    use crate::field::{ExtField, Field};
     use crate::hash::rust_crypto::{RustCryptoReader, RustCryptoWriter};
     use crate::hash::transcript::{Challenge, Reader, Writer};
-    use crate::utils::VecOps;
+    use crate::utils::{n_rand, VecOps};
 
-    impl<F: Field, Ext: ExtField<F>> super::Pointcheck<F, Ext> {
+    impl<F: Field, Ext: ExtensionField<F>> super::Pointcheck<F, Ext> {
         #[tracing::instrument(skip_all)]
         pub fn run_prover<Transcript>(
             &mut self,
@@ -190,7 +191,7 @@ mod test {
         }
     }
 
-    impl<F: Field, Ext: ExtField<F>> super::PointcheckVerifier<F, Ext> {
+    impl<F: Field, Ext: ExtensionField<F>> super::PointcheckVerifier<F, Ext> {
         fn run_verifier<Transcript>(
             &mut self,
             transcript: &mut Transcript,
@@ -205,8 +206,8 @@ mod test {
 
     #[test]
     fn test_pointcheck() {
-        type F = Goldilocks;
-        type Ext = Goldilocks2;
+        type F = p3_goldilocks::Goldilocks;
+        type Ext = BinomialExtensionField<F, 2>;
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
 
@@ -214,11 +215,10 @@ mod test {
         let mut rng = crate::test::seed_rng();
         let k = 11;
         let width = 2;
-        let mat = (0..width * (1 << k))
-            .map(|_| F::rand(&mut rng))
-            .collect::<Vec<_>>();
+        let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
-        let zs = (0..k).map(|_| Ext::rand(&mut rng)).collect::<Vec<_>>();
+        let zs = n_rand(&mut rng, k);
+
         let _evals = crate::mle::eval_mat(&zs, &mat, 1);
 
         for sweetness in 1..7 {

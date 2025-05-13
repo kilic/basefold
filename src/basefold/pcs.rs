@@ -1,10 +1,11 @@
+use p3_field::ExtensionField;
+use p3_field::Field;
+
 use super::code::RandomFoldableCode;
 use super::sumcheck::SumcheckProver;
 use super::sumcheck::SumcheckVerifier;
 use crate::data::MatrixOwn;
 use crate::data::MatrixRef;
-use crate::field::ExtField;
-use crate::field::Field;
 use crate::hash::transcript::Challenge;
 use crate::hash::transcript::ChallengeBits;
 use crate::hash::transcript::Reader;
@@ -19,7 +20,7 @@ use std::marker::PhantomData;
 
 pub struct Basefold<
     F: Field,
-    Ext: ExtField<F>,
+    Ext: ExtensionField<F>,
     MCom: MatrixCommitment<F>,
     VCom: VectorCommitment<Ext>,
     Code: RandomFoldableCode<F>,
@@ -33,7 +34,7 @@ pub struct Basefold<
 
 impl<
         F: Field,
-        Ext: ExtField<F>,
+        Ext: ExtensionField<F>,
         MCom: MatrixCommitment<F>,
         VCom: VectorCommitment<Ext>,
         Code: RandomFoldableCode<F>,

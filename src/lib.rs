@@ -14,16 +14,11 @@ pub enum Error {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     #[allow(dead_code)]
-    pub(crate) fn seed_rng() -> StdRng {
-        StdRng::seed_from_u64(1)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn os_rng() -> impl rand::Rng {
-        rand_core::OsRng
+    pub(crate) fn seed_rng() -> SmallRng {
+        SmallRng::seed_from_u64(1)
     }
 
     #[allow(dead_code)]

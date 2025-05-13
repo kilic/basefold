@@ -1,5 +1,6 @@
-use crate::field::{ExtField, Field};
 use itertools::Itertools;
+use p3_field::ExtensionField;
+use p3_field::Field;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub trait BatchInverse<F> {
@@ -23,7 +24,7 @@ where
                 (prev, p)
             })
             .collect_vec();
-        acc = acc.inverse().unwrap();
+        acc = acc.inverse();
         let prod = acc;
         for (mut tmp, p) in inter.into_iter().rev() {
             tmp *= acc;
@@ -36,7 +37,7 @@ where
     }
 }
 
-pub(crate) fn interpolate<F: Field, EF: ExtField<F>>(points: &[F], evals: &[EF]) -> Vec<EF> {
+pub(crate) fn interpolate<F: Field, EF: ExtensionField<F>>(points: &[F], evals: &[EF]) -> Vec<EF> {
     assert_eq!(points.len(), evals.len());
     if points.len() == 1 {
         vec![evals[0]]
@@ -90,7 +91,7 @@ impl<V: Field> VecOps<V> for &[V] {}
 impl<V: Field> VecOps<V> for &mut [V] {}
 
 pub trait VecOps<F: Field>: core::ops::Deref<Target = [F]> {
-    fn hadamard<E: ExtField<F>>(&self, other: &[E]) -> Vec<E> {
+    fn hadamard<E: ExtensionField<F>>(&self, other: &[E]) -> Vec<E> {
         assert_eq!(self.len(), other.len());
         self.iter()
             .zip_eq(other.iter())
@@ -98,12 +99,12 @@ pub trait VecOps<F: Field>: core::ops::Deref<Target = [F]> {
             .collect()
     }
 
-    fn dot<E: ExtField<F>>(&self, other: &[E]) -> E {
+    fn dot<E: ExtensionField<F>>(&self, other: &[E]) -> E {
         assert_eq!(self.len(), other.len());
         self.iter().zip_eq(other.iter()).map(|(&a, &b)| b * a).sum()
     }
 
-    fn par_hadamard<E: ExtField<F>>(&self, other: &[E]) -> Vec<E> {
+    fn par_hadamard<E: ExtensionField<F>>(&self, other: &[E]) -> Vec<E> {
         assert_eq!(self.len(), other.len());
         self.par_iter()
             .zip_eq(other.par_iter())
@@ -111,7 +112,7 @@ pub trait VecOps<F: Field>: core::ops::Deref<Target = [F]> {
             .collect()
     }
 
-    fn par_dot<E: ExtField<F>>(&self, other: &[E]) -> E {
+    fn par_dot<E: ExtensionField<F>>(&self, other: &[E]) -> E {
         assert_eq!(self.len(), other.len());
         self.par_iter()
             .zip_eq(other.par_iter())
@@ -119,7 +120,7 @@ pub trait VecOps<F: Field>: core::ops::Deref<Target = [F]> {
             .sum()
     }
 
-    fn horner<E: ExtField<F>>(&self, x: E) -> E {
+    fn horner<E: ExtensionField<F>>(&self, x: E) -> E {
         self.iter().rfold(E::ZERO, |acc, &coeff| acc * x + coeff)
     }
 }
