@@ -9,15 +9,12 @@ macro_rules! split128 {
 }
 
 #[cfg(test)]
-pub(crate) fn n_rand<F>(mut rng: impl rand::RngCore, n: usize) -> Vec<F>
+pub(crate) fn n_rand<F>(rng: impl rand::RngCore, n: usize) -> Vec<F>
 where
     rand::distr::StandardUniform: rand::distr::Distribution<F>,
 {
-    use itertools::Itertools;
     use rand::Rng;
-    std::iter::repeat_with(|| rng.random())
-        .take(n)
-        .collect_vec()
+    rng.random_iter().take(n).collect::<Vec<F>>()
 }
 
 #[inline(always)]

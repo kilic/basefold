@@ -1,18 +1,16 @@
-use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     data::MatrixOwn,
     hash::transcript::{Challenge, Reader, Writer},
-    utils::{BatchInverse, TwoAdicSlice, VecOps},
+    mle::SplitEqTree,
+    utils::{BatchInverse, TwoAdicSlice},
 };
 
 use super::{SumcheckProver, SumcheckVerifier};
 
 pub struct Pointcheck<F: Field, Ext: ExtensionField<F>> {
-    eq_tree0: Vec<Vec<Ext>>,
-    eq_tree1: Vec<Vec<Ext>>,
+    eq_tree: SplitEqTree<F, Ext>,
     zs_inv: Vec<Ext>,
     round: usize,
     evals: Vec<Ext>,
@@ -74,46 +72,22 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
 
     // * Evaluate matrix
     // * Store partial EQ trees in order to reuse them in pointcheck rounds
-    fn new(zs: &[Ext], mat: &MatrixOwn<F>, sweetness: usize) -> Self {
-        let (eq_lad0, mut eq_lad1, evals) =
-            tracing::info_span!("eval", s = sweetness).in_scope(|| {
-                let (z0, z1) = zs.split_at(mat.k() - sweetness);
-
-                let eq_tree0 = crate::mle::eq_tree(z0, Ext::ONE);
-                let eq_tree1 = crate::mle::eq_tree(z1, Ext::ONE);
-
-                // Last elements of partial eq trees is used to evaluate the matrix
-                let eq0 = eq_tree0.last().unwrap();
-                let eq1 = eq_tree1.last().unwrap();
-
-                let evals = (0..mat.width())
-                    .map(|col| {
-                        mat.chunks(eq0.len())
-                            .zip_eq(eq1.iter())
-                            .map(|(part, &c)| {
-                                part.par_iter()
-                                    .zip(eq0.par_iter())
-                                    .map(|(a, &b)| b * a[col])
-                                    .sum::<Ext>()
-                                    * c
-                            })
-                            .sum::<Ext>()
-                    })
-                    .collect();
-
-                (eq_tree0, eq_tree1, evals)
-            });
+    fn new(zs: &[Ext], mat: &MatrixOwn<F>, split: usize) -> Self {
+        let (mut eq_tree, evals) = tracing::info_span!("eval", s = split).in_scope(|| {
+            let eq_tree = crate::mle::SplitEqTree::new(zs, split);
+            let evals = eq_tree.eval_mat(mat);
+            (eq_tree, evals)
+        });
 
         // Last element of tailing eq tree is not required in pointcheck, so we dump it
-        eq_lad1.pop();
+        eq_tree.pop_right();
 
         let mut zs_inv = zs.to_vec();
         zs_inv.inverse();
 
         Self {
             zs_inv,
-            eq_tree0: eq_lad0,
-            eq_tree1: eq_lad1,
+            eq_tree,
             round: 0,
             evals,
             _marker: std::marker::PhantomData,
@@ -137,32 +111,13 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, 
         Transcript: Writer<Ext> + Challenge<Ext>,
     {
         let k = poly.k() - 1;
-
         let (p0, _) = poly.split_at_mut(1 << k);
-        let a0 = if !self.eq_tree1.is_empty() {
-            let eq1 = &self.eq_tree1.pop().unwrap();
-
-            // if eq1 exhausted, drain eq0
-            let eq0 = if self.eq_tree1.is_empty() {
-                &self.eq_tree0.pop().unwrap()
-            } else {
-                self.eq_tree0.last().unwrap()
-            };
-
-            p0.chunks(eq0.len())
-                .zip_eq(eq1.iter())
-                .map(|(part, &c)| part.par_dot(eq0) * c)
-                .sum()
-        } else {
-            p0.par_dot(&self.eq_tree0.pop().unwrap())
-        };
-
+        let a0 = self.eq_tree.dot(p0);
         let a1 = (*claim - a0) * self.zs_inv[k];
         transcript.write(a1)?;
         let r = transcript.draw();
         crate::mle::fix_var(poly, r);
         *claim = a0 + r * a1;
-
         self.round += 1;
         Ok(r)
     }
@@ -226,13 +181,13 @@ mod test {
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
 
-        let _evals = crate::mle::eval_mat(&zs, &mat, 1);
+        let _evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
 
-        for sweetness in 1..7 {
+        for eq_split in 1..7 {
             for d in 0..=k {
                 let (proof, checkpoint0) = {
                     let mut writer = Writer::init(b"");
-                    let mut sp = super::Pointcheck::new(&zs, &mat, sweetness);
+                    let mut sp = super::Pointcheck::new(&zs, &mat, eq_split);
                     assert_eq!(_evals, sp.evals());
                     sp.evals().iter().for_each(|&e| writer.write(e).unwrap());
                     let alpha = writer.draw();

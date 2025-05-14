@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
@@ -18,8 +17,7 @@ fn extrapolate<F: Field, EF: ExtensionField<F>>(evals: &[F], target: EF) -> EF {
 }
 
 pub struct EqSumcheck<F: Field, Ext: ExtensionField<F>> {
-    eq0: Vec<Ext>,
-    eq1: Vec<Ext>,
+    split_eq: crate::mle::SplitEq<F, Ext>,
     round: usize,
     k: usize,
     evals: Vec<Ext>,
@@ -36,7 +34,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
     where
         Transcript: Writer<Ext> + Challenge<Ext>,
     {
-        let chunk_size = self.eq0.len();
+        let chunk_size = self.split_eq.left.len();
         let mid = poly.len() / 2;
         let (p0, p1) = poly.split_at_mut(mid);
         let evals = p0
@@ -46,7 +44,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
                 part0
                     .par_iter()
                     .zip_eq(part1.par_iter())
-                    .zip_eq(self.eq0.par_iter())
+                    .zip_eq(self.split_eq.left.par_iter())
                     .map(|((&a0, &a1), &b)| [a0 * b, (a1.double() - a0) * b])
                     .reduce(|| [Ext::ZERO, Ext::ZERO], |a, b| [a[0] + b[0], a[1] + b[1]])
                     .to_vec()
@@ -57,12 +55,12 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
             let coeffs = evals.iter().map(|row| row[0]).collect::<Vec<_>>();
             let v0 = coeffs
                 .iter()
-                .zip(self.eq1.iter())
+                .zip(self.split_eq.right.iter())
                 .map(|(&a, &b)| b * a)
                 .sum::<Ext>();
 
             let coeffs = evals.iter().map(|row| row[1]).collect::<Vec<_>>();
-            let (zzlo, zzhi) = self.eq1.split_at(self.eq1.len() / 2);
+            let (zzlo, zzhi) = self.split_eq.right.split_at(self.split_eq.right.len() / 2);
             let v2 = zzlo
                 .iter()
                 .zip(zzhi.iter())
@@ -79,7 +77,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
         *claim = extrapolate(&evals, r);
 
         crate::mle::fix_var(poly, r);
-        crate::mle::fix_var(&mut self.eq1, r);
+        crate::mle::fix_var(&mut self.split_eq.right, r);
         Ok(r)
     }
 
@@ -92,10 +90,10 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
     where
         Transcript: Writer<Ext> + Challenge<Ext>,
     {
-        assert_eq!(poly.k(), self.eq0.k());
+        assert_eq!(poly.k(), self.split_eq.left.k());
         let mid = poly.len() / 2;
         let (p0, p1) = poly.split_at_mut(mid);
-        let (eq0, eq1) = self.eq0.split_at_mut(mid);
+        let (eq0, eq1) = self.split_eq.left.split_at_mut(mid);
         let mut evals = p0
             .par_iter()
             .zip(p1.par_iter())
@@ -114,7 +112,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
             .to_vec();
 
         {
-            let eq1 = *self.eq1.first().unwrap();
+            let eq1 = *self.split_eq.right.first().unwrap();
             evals[0] *= eq1;
             evals[1] *= eq1;
         }
@@ -125,7 +123,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
         *claim = extrapolate(&evals, r);
 
         crate::mle::fix_var(poly, r);
-        crate::mle::fix_var(&mut self.eq0, r);
+        crate::mle::fix_var(&mut self.split_eq.left, r);
 
         Ok(r)
     }
@@ -135,38 +133,18 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
     type Cfg = usize;
     type Verifier = EqSumcheckVerifier<F, Ext>;
 
-    // * Evaluate matrix
-    // * Store partial EQs to reuse them in sumcheck rounds
-    fn new(zs: &[Ext], mat: &MatrixOwn<F>, sweetness: usize) -> Self {
+    fn new(zs: &[Ext], mat: &MatrixOwn<F>, eq_split: usize) -> Self {
         let k = mat.k();
         assert_eq!(k, zs.len());
 
-        let (eq0, eq1, evals) = tracing::info_span!("eval", s = sweetness).in_scope(|| {
-            let (z0, z1) = zs.split_at(k - sweetness);
-            let eq0 = crate::mle::eq(z0);
-            let eq1 = crate::mle::eq(z1);
-
-            let evals = (0..mat.width())
-                .map(|col| {
-                    mat.chunks(eq0.len())
-                        .zip_eq(eq1.iter())
-                        .map(|(part, &c)| {
-                            c * part
-                                .par_iter()
-                                .zip(eq0.par_iter())
-                                .map(|(a, &b)| b * a[col])
-                                .sum::<Ext>()
-                        })
-                        .sum::<Ext>()
-                })
-                .collect();
-
-            (eq0, eq1, evals)
+        let (split_eq, evals) = tracing::info_span!("eval", s = eq_split).in_scope(|| {
+            let split_eq = crate::mle::SplitEq::new(zs, eq_split);
+            let evals = split_eq.eval_mat(mat);
+            (split_eq, evals)
         });
 
         Self {
-            eq0,
-            eq1,
+            split_eq,
             round: 0,
             k,
             evals,
@@ -192,7 +170,7 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
     {
         assert!(self.round < self.k);
         self.round += 1;
-        if poly.k() > self.eq0.k() {
+        if poly.k() > self.split_eq.left.k() {
             self.round_chunked(transcript, claim, poly)
         } else {
             self.round_nonchunked(transcript, claim, poly)
@@ -257,9 +235,6 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for EqSumcheckVe
 
 #[cfg(test)]
 mod test {
-
-    use p3_field::{extension::BinomialExtensionField, ExtensionField, Field};
-
     use crate::{
         basefold::sumcheck::{SumcheckProver, SumcheckVerifier},
         data::MatrixOwn,
@@ -269,6 +244,7 @@ mod test {
         },
         utils::{n_rand, VecOps},
     };
+    use p3_field::{extension::BinomialExtensionField, ExtensionField, Field};
 
     impl<F: Field, Ext: ExtensionField<F>> super::EqSumcheck<F, Ext> {
         #[tracing::instrument(skip_all)]
@@ -317,13 +293,13 @@ mod test {
         let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
-        let evals = crate::mle::eval_mat(&zs, &mat, 1);
+        let evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
 
-        for sweetness in 1..7 {
+        for eq_split in 1..7 {
             for d in 0..=k {
                 let (proof, checkpoint0) = {
                     let mut writer = Writer::init(b"");
-                    let mut sp = super::EqSumcheck::new(&zs, &mat, sweetness);
+                    let mut sp = super::EqSumcheck::new(&zs, &mat, eq_split);
                     assert_eq!(evals, sp.evals());
                     writer.write_many(sp.evals()).unwrap();
                     let alpha = writer.draw();
