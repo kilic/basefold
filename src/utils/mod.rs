@@ -8,8 +8,7 @@ macro_rules! split128 {
     };
 }
 
-#[cfg(test)]
-pub(crate) fn n_rand<F>(rng: impl rand::RngCore, n: usize) -> Vec<F>
+pub fn n_rand<F>(rng: impl rand::RngCore, n: usize) -> Vec<F>
 where
     rand::distr::StandardUniform: rand::distr::Distribution<F>,
 {

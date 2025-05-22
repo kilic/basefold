@@ -40,4 +40,4 @@ prover-sanity = []
 
 [[bench]]
 harness = false
-name = "eq"
+name = "mle"

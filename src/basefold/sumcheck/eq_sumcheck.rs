@@ -137,11 +137,8 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for EqSumcheck<F, 
         let k = mat.k();
         assert_eq!(k, zs.len());
 
-        let (split_eq, evals) = tracing::info_span!("eval", s = eq_split).in_scope(|| {
-            let split_eq = crate::mle::SplitEq::new(zs, eq_split);
-            let evals = split_eq.eval_mat(mat);
-            (split_eq, evals)
-        });
+        let split_eq = crate::mle::SplitEq::new(zs, eq_split);
+        let evals = split_eq.eval_mat(mat);
 
         Self {
             split_eq,
@@ -245,9 +242,9 @@ mod test {
         utils::{n_rand, VecOps},
     };
     use p3_field::{extension::BinomialExtensionField, ExtensionField, Field};
+    use rayon::iter::ParallelIterator;
 
     impl<F: Field, Ext: ExtensionField<F>> super::EqSumcheck<F, Ext> {
-        #[tracing::instrument(skip_all)]
         fn run_prover<Transcript>(
             &mut self,
             transcript: &mut Transcript,
@@ -287,50 +284,60 @@ mod test {
 
         // crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
-        let k = 11;
-        let width = 2;
+        let k = 23;
+        let width = 1;
 
         let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
         let evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
 
-        for eq_split in 1..7 {
-            for d in 0..=k {
-                let (proof, checkpoint0) = {
-                    let mut writer = Writer::init(b"");
-                    let mut sp = super::EqSumcheck::new(&zs, &mat, eq_split);
-                    assert_eq!(evals, sp.evals());
-                    writer.write_many(sp.evals()).unwrap();
+        for split in 0..k / 2 {
+            let (proof, checkpoint0) = tracing::info_span!("prover", s = split).in_scope(|| {
+                let mut writer = Writer::init(b"");
+
+                let mut sp = tracing::info_span!("eval poly")
+                    .in_scope(|| super::EqSumcheck::new(&zs, &mat, split));
+
+                assert_eq!(evals, sp.evals());
+                writer.write_many(sp.evals()).unwrap();
+
+                let (mut poly, mut claim) = tracing::info_span!("compress").in_scope(|| {
                     let alpha = writer.draw();
-                    let mut claim: Ext = evals.horner(alpha);
-                    let mut poly = mat.iter().map(|row| row.horner(alpha)).collect::<Vec<_>>();
+                    let claim: Ext = evals.horner(alpha);
+                    (
+                        mat.par_iter()
+                            .map(|row| row.horner(alpha))
+                            .collect::<Vec<_>>(),
+                        claim,
+                    )
+                });
 
-                    let _rs = sp
-                        .run_prover(&mut writer, d, &mut claim, &mut poly)
-                        .unwrap();
+                let _rs = tracing::info_span!("sumcheck").in_scope(|| {
+                    sp.run_prover(&mut writer, k, &mut claim, &mut poly)
+                        .unwrap()
+                });
 
-                    assert_eq!(poly.len(), 1 << (k - d));
-                    writer.write_many(&poly).unwrap();
+                assert_eq!(poly.len(), 1);
+                writer.write_many(&poly).unwrap();
 
-                    let checkpoint: F = writer.draw();
-                    (writer.finalize(), checkpoint)
-                };
+                let checkpoint: F = writer.draw();
+                (writer.finalize(), checkpoint)
+            });
 
-                {
-                    let mut reader = Reader::init(&proof, b"");
+            {
+                let mut reader = Reader::init(&proof, b"");
 
-                    let evals: Vec<Ext> = reader.read_many(mat.width()).unwrap();
-                    let alpha = reader.draw();
-                    let claim = evals.horner(alpha);
+                let evals: Vec<Ext> = reader.read_many(mat.width()).unwrap();
+                let alpha = reader.draw();
+                let claim = evals.horner(alpha);
 
-                    let mut sv = super::EqSumcheckVerifier::<F, Ext>::new(claim, &zs);
-                    let _ = sv.run_verifier(&mut reader, d).unwrap();
-                    sv.verify(&mut reader).unwrap();
+                let mut sv = super::EqSumcheckVerifier::<F, Ext>::new(claim, &zs);
+                let _ = sv.run_verifier(&mut reader, k).unwrap();
+                sv.verify(&mut reader).unwrap();
 
-                    let checkpoint1: F = reader.draw();
-                    assert_eq!(checkpoint0, checkpoint1);
-                }
+                let checkpoint1: F = reader.draw();
+                assert_eq!(checkpoint0, checkpoint1);
             }
         }
     }

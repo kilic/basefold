@@ -17,6 +17,60 @@ pub struct Pointcheck<F: Field, Ext: ExtensionField<F>> {
     _marker: std::marker::PhantomData<F>,
 }
 
+impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
+    type Cfg = usize;
+    type Verifier = PointcheckVerifier<F, Ext>;
+
+    // * Evaluate matrix
+    // * Store partial EQ trees in order to reuse them in pointcheck rounds
+    fn new(zs: &[Ext], mat: &MatrixOwn<F>, split: usize) -> Self {
+        let mut eq_tree = crate::mle::SplitEqTree::new(zs, split);
+        let evals = eq_tree.eval_mat(mat);
+
+        // Last element of tailing eq tree is not required in pointcheck, so we dump it
+        eq_tree.pop_right();
+
+        let mut zs_inv = zs.to_vec();
+        zs_inv.inverse();
+
+        Self {
+            zs_inv,
+            eq_tree,
+            round: 0,
+            evals,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn evals(&self) -> &[Ext] {
+        &self.evals
+    }
+
+    // In the first round `poly` is assumed to be compressed matrix that is used
+    // when creating new instance of `EqSumcheck`. Similarly `claim` is the
+    // compressed claim.
+    fn round<Transcript>(
+        &mut self,
+        transcript: &mut Transcript,
+        claim: &mut Ext,
+        poly: &mut Vec<Ext>,
+    ) -> Result<Ext, crate::Error>
+    where
+        Transcript: Writer<Ext> + Challenge<Ext>,
+    {
+        let k = poly.k() - 1;
+        let (p0, _) = poly.split_at_mut(1 << k);
+        let a0 = self.eq_tree.dot(p0);
+        let a1 = (*claim - a0) * self.zs_inv[k];
+        transcript.write(a1)?;
+        let r = transcript.draw();
+        crate::mle::fix_var(poly, r);
+        *claim = a0 + r * a1;
+        self.round += 1;
+        Ok(r)
+    }
+}
+
 pub struct PointcheckVerifier<F: Field, Ext: ExtensionField<F>> {
     rs: Vec<Ext>,
     zs: Vec<Ext>,
@@ -66,68 +120,12 @@ impl<F: Field, Ext: ExtensionField<F>> SumcheckVerifier<F, Ext> for PointcheckVe
     }
 }
 
-impl<F: Field, Ext: ExtensionField<F>> SumcheckProver<F, Ext> for Pointcheck<F, Ext> {
-    type Cfg = usize;
-    type Verifier = PointcheckVerifier<F, Ext>;
-
-    // * Evaluate matrix
-    // * Store partial EQ trees in order to reuse them in pointcheck rounds
-    fn new(zs: &[Ext], mat: &MatrixOwn<F>, split: usize) -> Self {
-        let (mut eq_tree, evals) = tracing::info_span!("eval", s = split).in_scope(|| {
-            let eq_tree = crate::mle::SplitEqTree::new(zs, split);
-            let evals = eq_tree.eval_mat(mat);
-            (eq_tree, evals)
-        });
-
-        // Last element of tailing eq tree is not required in pointcheck, so we dump it
-        eq_tree.pop_right();
-
-        let mut zs_inv = zs.to_vec();
-        zs_inv.inverse();
-
-        Self {
-            zs_inv,
-            eq_tree,
-            round: 0,
-            evals,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    fn evals(&self) -> &[Ext] {
-        &self.evals
-    }
-
-    // In the first round `poly` is assumed to be compressed matrix that is used
-    // when creating new instance of `EqSumcheck`. Similarly `claim` is the
-    // compressed claim.
-    fn round<Transcript>(
-        &mut self,
-        transcript: &mut Transcript,
-        claim: &mut Ext,
-        poly: &mut Vec<Ext>,
-    ) -> Result<Ext, crate::Error>
-    where
-        Transcript: Writer<Ext> + Challenge<Ext>,
-    {
-        let k = poly.k() - 1;
-        let (p0, _) = poly.split_at_mut(1 << k);
-        let a0 = self.eq_tree.dot(p0);
-        let a1 = (*claim - a0) * self.zs_inv[k];
-        transcript.write(a1)?;
-        let r = transcript.draw();
-        crate::mle::fix_var(poly, r);
-        *claim = a0 + r * a1;
-        self.round += 1;
-        Ok(r)
-    }
-}
-
 #[cfg(test)]
 mod test {
 
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{ExtensionField, Field};
+    use rayon::iter::ParallelIterator;
 
     use crate::basefold::sumcheck::{SumcheckProver, SumcheckVerifier};
     use crate::data::MatrixOwn;
@@ -136,7 +134,6 @@ mod test {
     use crate::utils::{n_rand, VecOps};
 
     impl<F: Field, Ext: ExtensionField<F>> super::Pointcheck<F, Ext> {
-        #[tracing::instrument(skip_all)]
         pub fn run_prover<Transcript>(
             &mut self,
             transcript: &mut Transcript,
@@ -175,51 +172,61 @@ mod test {
 
         // crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
-        let k = 11;
-        let width = 2;
+        let k = 23;
+        let width = 1;
         let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
 
         let _evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
 
-        for eq_split in 1..7 {
-            for d in 0..=k {
-                let (proof, checkpoint0) = {
-                    let mut writer = Writer::init(b"");
-                    let mut sp = super::Pointcheck::new(&zs, &mat, eq_split);
-                    assert_eq!(_evals, sp.evals());
-                    sp.evals().iter().for_each(|&e| writer.write(e).unwrap());
-                    let alpha = writer.draw();
-                    let mut claim = sp.evals.horner(alpha);
-                    let mut poly = mat.iter().map(|row| row.horner(alpha)).collect::<Vec<_>>();
+        for split in 1..k / 2 {
+            let (proof, checkpoint0) = tracing::info_span!("prover", s = split).in_scope(|| {
+                let mut writer = Writer::init(b"");
 
-                    let _rs = sp
-                        .run_prover(&mut writer, d, &mut claim, &mut poly)
-                        .unwrap();
+                let mut sp = tracing::info_span!("eval poly")
+                    .in_scope(|| super::Pointcheck::new(&zs, &mat, split));
 
-                    assert_eq!(poly.len(), 1 << (k - d));
-                    writer.write_many(&poly).unwrap();
+                assert_eq!(_evals, sp.evals());
+                writer.write_many(sp.evals()).unwrap();
+                let alpha = writer.draw();
 
-                    let checkpoint: F = writer.draw();
-                    (writer.finalize(), checkpoint)
-                };
+                let (mut poly, mut claim) = tracing::info_span!("compress").in_scope(|| {
+                    let claim: Ext = sp.evals.horner(alpha);
+                    (
+                        mat.par_iter()
+                            .map(|row| row.horner(alpha))
+                            .collect::<Vec<_>>(),
+                        claim,
+                    )
+                });
 
-                {
-                    let mut reader = Reader::init(&proof, b"");
+                let _rs = tracing::info_span!("pointcheck").in_scope(|| {
+                    sp.run_prover(&mut writer, k, &mut claim, &mut poly)
+                        .unwrap()
+                });
 
-                    let evals: Vec<Ext> = reader.read_many(mat.width()).unwrap();
-                    let alpha = reader.draw();
-                    let claim = evals.horner(alpha);
+                assert_eq!(poly.len(), 1);
+                writer.write_many(&poly).unwrap();
 
-                    let mut sv = super::PointcheckVerifier::<F, Ext>::new(claim, &zs);
-                    let _ = sv.run_verifier(&mut reader, d).unwrap();
+                let checkpoint: F = writer.draw();
+                (writer.finalize(), checkpoint)
+            });
 
-                    sv.verify(&mut reader).unwrap();
+            {
+                let mut reader = Reader::init(&proof, b"");
 
-                    let checkpoint1: F = reader.draw();
-                    assert_eq!(checkpoint0, checkpoint1);
-                }
+                let evals: Vec<Ext> = reader.read_many(mat.width()).unwrap();
+                let alpha = reader.draw();
+                let claim = evals.horner(alpha);
+
+                let mut sv = super::PointcheckVerifier::<F, Ext>::new(claim, &zs);
+                let _ = sv.run_verifier(&mut reader, k).unwrap();
+
+                sv.verify(&mut reader).unwrap();
+
+                let checkpoint1: F = reader.draw();
+                assert_eq!(checkpoint0, checkpoint1);
             }
         }
     }

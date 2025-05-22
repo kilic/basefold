@@ -28,24 +28,6 @@ pub fn eq_scaled<F: Field>(zs: &[F], scale: F) -> Vec<F> {
     eq
 }
 
-pub fn eq_tree<F: Field>(zs: &[F], scale: F) -> Vec<Vec<F>> {
-    let k = zs.len();
-    let mut eq = unsafe_allocate_zero_vec(1 << k);
-    eq[0] = scale;
-    let mut ladder = vec![vec![scale]];
-    for (i, &zi) in zs.iter().enumerate() {
-        let (lo, hi) = eq.split_at_mut(1 << i);
-        lo.par_iter_mut()
-            .zip(hi.par_iter_mut())
-            .for_each(|(lo, hi)| {
-                *hi = *lo * zi;
-                *lo -= *hi;
-            });
-        ladder.push(eq[0..1 << (i + 1)].to_vec());
-    }
-    ladder
-}
-
 pub fn eval_poly<F: Field>(zs: &[F], poly: &[F]) -> F {
     assert_eq!(poly.k(), zs.len());
     let k = poly.k();
@@ -72,6 +54,68 @@ pub fn fix_var<F: Field>(poly: &mut Vec<F>, zi: F) {
         .zip(p1.par_iter())
         .for_each(|(a0, a1)| *a0 += zi * (*a1 - *a0));
     poly.truncate(mid);
+}
+
+pub struct SplitEq<F: Field, Ext: ExtensionField<F>> {
+    pub(crate) left: Vec<Ext>,
+    pub(crate) right: Vec<Ext>,
+    _marker: std::marker::PhantomData<F>,
+}
+
+impl<F: Field, Ext: ExtensionField<F>> SplitEq<F, Ext> {
+    pub fn new(zs: &[Ext], split: usize) -> Self {
+        let (z0, z1) = zs.split_at(zs.len() - split);
+        let left = crate::mle::eq(z0);
+        let right = crate::mle::eq(z1);
+        Self {
+            left,
+            right,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn eval_poly(&self, poly: &[F]) -> Ext {
+        assert_eq!(poly.k(), self.left.k() + self.right.k());
+        poly.chunks(self.left.len())
+            .zip_eq(self.right.iter())
+            .map(|(part, &c)| part.par_dot(&self.left) * c)
+            .sum()
+    }
+
+    pub fn eval_mat(&self, mat: &MatrixOwn<F>) -> Vec<Ext> {
+        (0..mat.width())
+            .map(|col| {
+                mat.chunks(self.left.len())
+                    .zip_eq(self.right.iter())
+                    .map(|(part, &c)| {
+                        part.par_iter()
+                            .zip(self.left.par_iter())
+                            .map(|(a, &b)| b * a[col])
+                            .sum::<Ext>()
+                            * c
+                    })
+                    .sum::<Ext>()
+            })
+            .collect()
+    }
+}
+
+pub(crate) fn eq_tree<F: Field>(zs: &[F], scale: F) -> Vec<Vec<F>> {
+    let k = zs.len();
+    let mut eq = unsafe_allocate_zero_vec(1 << k);
+    eq[0] = scale;
+    let mut tree = vec![vec![scale]];
+    for (i, &zi) in zs.iter().enumerate() {
+        let (lo, hi) = eq.split_at_mut(1 << i);
+        lo.par_iter_mut()
+            .zip(hi.par_iter_mut())
+            .for_each(|(lo, hi)| {
+                *hi = *lo * zi;
+                *lo -= *hi;
+            });
+        tree.push(eq[0..1 << (i + 1)].to_vec());
+    }
+    tree
 }
 
 pub struct SplitEqTree<F: Field, Ext: ExtensionField<F>> {
@@ -140,50 +184,6 @@ impl<F: Field, Ext: ExtensionField<F>> SplitEqTree<F, Ext> {
     }
 }
 
-pub struct SplitEq<F: Field, Ext: ExtensionField<F>> {
-    pub(crate) left: Vec<Ext>,
-    pub(crate) right: Vec<Ext>,
-    _marker: std::marker::PhantomData<F>,
-}
-
-impl<F: Field, Ext: ExtensionField<F>> SplitEq<F, Ext> {
-    pub fn new(zs: &[Ext], split: usize) -> Self {
-        let (z0, z1) = zs.split_at(zs.len() - split);
-        let eq0 = crate::mle::eq(z0);
-        let eq1 = crate::mle::eq(z1);
-        Self {
-            left: eq0,
-            right: eq1,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    pub fn eval(&self, poly: &[F]) -> Ext {
-        assert_eq!(poly.k(), self.left.k() + self.right.k());
-        poly.chunks(self.left.len())
-            .zip_eq(self.right.iter())
-            .map(|(part, &c)| part.par_dot(&self.left) * c)
-            .sum()
-    }
-
-    pub fn eval_mat(&self, mat: &MatrixOwn<F>) -> Vec<Ext> {
-        (0..mat.width())
-            .map(|col| {
-                mat.chunks(self.left.len())
-                    .zip_eq(self.right.iter())
-                    .map(|(part, &c)| {
-                        part.par_iter()
-                            .zip(self.left.par_iter())
-                            .map(|(a, &b)| b * a[col])
-                            .sum::<Ext>()
-                            * c
-                    })
-                    .sum::<Ext>()
-            })
-            .collect()
-    }
-}
-
 pub fn eval_eq_xy<F: Field>(x: &[F], y: &[F]) -> F {
     assert_eq!(x.len(), y.len());
     x.par_iter()
@@ -228,13 +228,13 @@ mod test {
         let zs: Vec<F> = n_rand(&mut rng, k);
         let poly = n_rand(&mut rng, 1 << k);
 
-        let e0 = tracing::info_span!("BASE").in_scope(|| super::eval_poly(&zs, &poly));
-        let e1 = tracing::info_span!("EQDT").in_scope(|| super::eq(&zs).dot(&poly));
+        let e0 = tracing::info_span!("naive eval").in_scope(|| super::eval_poly(&zs, &poly));
+        let e1 = tracing::info_span!("eq mul").in_scope(|| super::eq(&zs).dot(&poly));
         assert_eq!(e0, e1);
         for split in 0..k / 2 {
-            let e1 = tracing::info_span!("SEE", split).in_scope(|| {
+            let e1 = tracing::info_span!("split", split).in_scope(|| {
                 let split_eq = super::SplitEq::new(&zs, split);
-                split_eq.eval(&poly)
+                split_eq.eval_poly(&poly)
             });
             assert_eq!(e0, e1);
         }
@@ -250,7 +250,7 @@ mod test {
             .collect::<Vec<_>>();
 
         for split in 0..k / 2 {
-            let e1 = tracing::info_span!("MAT", split).in_scope(|| {
+            let e1 = tracing::info_span!("mat", split).in_scope(|| {
                 let split_eq = super::SplitEq::new(&zs, split);
                 split_eq.eval_mat(&mat)
             });
