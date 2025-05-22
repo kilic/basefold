@@ -1,5 +1,9 @@
+use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::{
+    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator},
+    slice::ParallelSlice,
+};
 
 use crate::{
     data::MatrixOwn,
@@ -38,40 +42,30 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
         let mid = poly.len() / 2;
         let (p0, p1) = poly.split_at_mut(mid);
         let evals = p0
-            .chunks(chunk_size)
-            .zip(p1.chunks(chunk_size))
+            .par_chunks(chunk_size)
+            .zip(p1.par_chunks(chunk_size))
             .map(|(part0, part1)| {
                 part0
-                    .par_iter()
-                    .zip_eq(part1.par_iter())
-                    .zip_eq(self.split_eq.left.par_iter())
-                    .map(|((&a0, &a1), &b)| [a0 * b, (a1.double() - a0) * b])
-                    .reduce(|| [Ext::ZERO, Ext::ZERO], |a, b| [a[0] + b[0], a[1] + b[1]])
-                    .to_vec()
+                    .iter()
+                    .zip_eq(part1.iter())
+                    .zip_eq(self.split_eq.left.iter())
+                    .fold([Ext::ZERO, Ext::ZERO], |acc, ((&a0, &a1), &b)| {
+                        [acc[0] + a0 * b, acc[1] + (a1.double() - a0) * b]
+                    })
             })
             .collect::<Vec<_>>();
 
-        let mut evals = {
-            let coeffs = evals.iter().map(|row| row[0]).collect::<Vec<_>>();
-            let v0 = coeffs
-                .iter()
-                .zip(self.split_eq.right.iter())
-                .map(|(&a, &b)| b * a)
-                .sum::<Ext>();
+        let (zzlo, zzhi) = self.split_eq.right.split_at(self.split_eq.right.len() / 2);
+        let mut evals = evals
+            .par_iter()
+            .zip(self.split_eq.right.par_iter())
+            .zip(zzlo.par_iter())
+            .zip(zzhi.par_iter())
+            .map(|(((&evals, &c), &zzlo), &zzhi)| [c * evals[0], (zzhi.double() - zzlo) * evals[1]])
+            .reduce(|| [Ext::ZERO, Ext::ZERO], |a, b| [a[0] + b[0], a[1] + b[1]])
+            .to_vec();
 
-            let coeffs = evals.iter().map(|row| row[1]).collect::<Vec<_>>();
-            let (zzlo, zzhi) = self.split_eq.right.split_at(self.split_eq.right.len() / 2);
-            let v2 = zzlo
-                .iter()
-                .zip(zzhi.iter())
-                .zip(coeffs.iter())
-                .map(|((&zzlo, &zzhi), &c)| (zzhi.double() - zzlo) * c)
-                .sum::<Ext>();
-
-            vec![v0, v2]
-        };
-
-        evals.iter().try_for_each(|&e| transcript.write(e))?;
+        transcript.write_many(&evals)?;
         evals.insert(1, *claim - evals[0]);
         let r: Ext = transcript.draw();
         *claim = extrapolate(&evals, r);
@@ -117,7 +111,7 @@ impl<F: Field, Ext: ExtensionField<F>> EqSumcheck<F, Ext> {
             evals[1] *= eq1;
         }
 
-        evals.iter().try_for_each(|&e| transcript.write(e))?;
+        transcript.write_many(&evals)?;
         evals.insert(1, *claim - evals[0]);
         let r: Ext = transcript.draw();
         *claim = extrapolate(&evals, r);
@@ -282,7 +276,7 @@ mod test {
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
 
-        // crate::test::init_tracing();
+        crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
         let k = 23;
         let width = 1;
@@ -290,21 +284,19 @@ mod test {
         let mat: Vec<F> = n_rand(&mut rng, width * (1 << k));
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
-        let evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
 
-        for split in 0..k / 2 {
+        for split in 0..k {
             let (proof, checkpoint0) = tracing::info_span!("prover", s = split).in_scope(|| {
                 let mut writer = Writer::init(b"");
 
                 let mut sp = tracing::info_span!("eval poly")
                     .in_scope(|| super::EqSumcheck::new(&zs, &mat, split));
 
-                assert_eq!(evals, sp.evals());
                 writer.write_many(sp.evals()).unwrap();
 
                 let (mut poly, mut claim) = tracing::info_span!("compress").in_scope(|| {
                     let alpha = writer.draw();
-                    let claim: Ext = evals.horner(alpha);
+                    let claim: Ext = sp.evals().horner(alpha);
                     (
                         mat.par_iter()
                             .map(|row| row.horner(alpha))

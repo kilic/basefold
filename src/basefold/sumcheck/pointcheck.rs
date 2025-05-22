@@ -170,7 +170,7 @@ mod test {
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
 
-        // crate::test::init_tracing();
+        crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
         let k = 23;
         let width = 1;
@@ -178,16 +178,13 @@ mod test {
         let mat = MatrixOwn::new(width, mat);
         let zs = n_rand(&mut rng, k);
 
-        let _evals = crate::mle::SplitEq::new(&zs, 1).eval_mat(&mat);
-
-        for split in 1..k / 2 {
+        for split in 1..k {
             let (proof, checkpoint0) = tracing::info_span!("prover", s = split).in_scope(|| {
                 let mut writer = Writer::init(b"");
 
                 let mut sp = tracing::info_span!("eval poly")
                     .in_scope(|| super::Pointcheck::new(&zs, &mat, split));
 
-                assert_eq!(_evals, sp.evals());
                 writer.write_many(sp.evals()).unwrap();
                 let alpha = writer.draw();
 

@@ -2,10 +2,13 @@ use crate::{
     data::MatrixOwn,
     utils::{unsafe_allocate_zero_vec, TwoAdicSlice, VecOps},
 };
-use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+use rayon::{
+    iter::{
+        IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
+        ParallelIterator,
+    },
+    slice::ParallelSlice,
 };
 
 pub fn eq<F: Field>(zs: &[F]) -> Vec<F> {
@@ -76,20 +79,20 @@ impl<F: Field, Ext: ExtensionField<F>> SplitEq<F, Ext> {
 
     pub fn eval_poly(&self, poly: &[F]) -> Ext {
         assert_eq!(poly.k(), self.left.k() + self.right.k());
-        poly.chunks(self.left.len())
-            .zip_eq(self.right.iter())
-            .map(|(part, &c)| part.par_dot(&self.left) * c)
+        poly.par_chunks(self.left.len())
+            .zip_eq(self.right.par_iter())
+            .map(|(part, &c)| part.dot(&self.left) * c)
             .sum()
     }
 
     pub fn eval_mat(&self, mat: &MatrixOwn<F>) -> Vec<Ext> {
         (0..mat.width())
             .map(|col| {
-                mat.chunks(self.left.len())
-                    .zip_eq(self.right.iter())
+                mat.par_chunks(self.left.len())
+                    .zip_eq(self.right.par_iter())
                     .map(|(part, &c)| {
-                        part.par_iter()
-                            .zip(self.left.par_iter())
+                        part.iter()
+                            .zip(self.left.iter())
                             .map(|(a, &b)| b * a[col])
                             .sum::<Ext>()
                             * c
@@ -141,11 +144,11 @@ impl<F: Field, Ext: ExtensionField<F>> SplitEqTree<F, Ext> {
         let right = self.right.last().unwrap();
         (0..mat.width())
             .map(|col| {
-                mat.chunks(left.len())
-                    .zip_eq(right.iter())
+                mat.par_chunks(left.len())
+                    .zip_eq(right.par_iter())
                     .map(|(part, &c)| {
-                        part.par_iter()
-                            .zip(left.par_iter())
+                        part.iter()
+                            .zip(left.iter())
                             .map(|(a, &b)| b * a[col])
                             .sum::<Ext>()
                             * c
@@ -174,9 +177,9 @@ impl<F: Field, Ext: ExtensionField<F>> SplitEqTree<F, Ext> {
                 self.left.last().unwrap()
             };
 
-            poly.chunks(eq0.len())
-                .zip_eq(eq1.iter())
-                .map(|(part, &c)| part.par_dot(eq0) * c)
+            poly.par_chunks(eq0.len())
+                .zip_eq(eq1.par_iter())
+                .map(|(part, &c)| part.dot(eq0) * c)
                 .sum()
         } else {
             poly.par_dot(&self.pop_left())
@@ -231,7 +234,8 @@ mod test {
         let e0 = tracing::info_span!("naive eval").in_scope(|| super::eval_poly(&zs, &poly));
         let e1 = tracing::info_span!("eq mul").in_scope(|| super::eq(&zs).dot(&poly));
         assert_eq!(e0, e1);
-        for split in 0..k / 2 {
+
+        for split in 0..k {
             let e1 = tracing::info_span!("split", split).in_scope(|| {
                 let split_eq = super::SplitEq::new(&zs, split);
                 split_eq.eval_poly(&poly)

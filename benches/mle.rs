@@ -48,7 +48,7 @@ fn bench_eval_poly(c: &mut Criterion) {
                 |b| {
                     b.iter(|| {
                         let split_eq = mle::SplitEq::new(black_box(&zs), split);
-                        let _ = split_eq.eval_poly(&poly);
+                        let _ = split_eq.eval_poly(poly);
                     })
                 },
             );
