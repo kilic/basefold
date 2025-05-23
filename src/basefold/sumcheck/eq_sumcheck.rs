@@ -276,7 +276,7 @@ mod test {
         type Writer = RustCryptoWriter<Vec<u8>, sha3::Keccak256>;
         type Reader<'a> = RustCryptoReader<&'a [u8], sha3::Keccak256>;
 
-        crate::test::init_tracing();
+        // crate::test::init_tracing();
         let mut rng = crate::test::seed_rng();
         let k = 23;
         let width = 1;
