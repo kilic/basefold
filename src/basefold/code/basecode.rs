@@ -1,32 +1,10 @@
 use crate::data::{MatrixOwn, MatrixRef};
-use crate::utils::{BatchInverse, TwoAdicSlice};
+use crate::utils::BatchInverse;
 use p3_field::{ExtensionField, Field};
 use rand::{distr::StandardUniform, prelude::Distribution, Rng};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::ParallelIterator;
 
-pub trait RandomFoldableCode<F: Field> {
-    fn n0(&self) -> usize {
-        self.k0() + self.c()
-    }
-    fn k0(&self) -> usize;
-    fn n_vars(&self) -> usize;
-    fn c(&self) -> usize;
-    fn d(&self) -> usize {
-        self.n_vars() - self.k0()
-    }
-    fn encode_base<'a, Ext: ExtensionField<F>>(&self, m: MatrixRef<'a, Ext>) -> Vec<Ext>;
-    fn encode(&self, m: &MatrixOwn<F>) -> MatrixOwn<F>;
-    fn fold<Ext: ExtensionField<F>>(&self, cw: &mut Vec<Ext>, x: Ext);
-    fn fold_single<Ext: ExtensionField<F>>(
-        &self,
-        height: usize,
-        index: usize,
-        l: &Ext,
-        r: &Ext,
-        x: &Ext,
-    ) -> Ext;
-}
-
+#[derive(Clone, Debug)]
 pub struct Basecode<F> {
     g0: Vec<Vec<F>>,
     c: usize,
@@ -70,7 +48,7 @@ impl<F: Field> Basecode<F> {
     }
 }
 
-impl<F: Field> RandomFoldableCode<F> for Basecode<F> {
+impl<F: Field> super::RandomFoldableCode<F> for Basecode<F> {
     fn n_vars(&self) -> usize {
         self.n_vars
     }
@@ -104,14 +82,14 @@ impl<F: Field> RandomFoldableCode<F> for Basecode<F> {
         assert_eq!(m.height(), 1 << self.n_vars);
 
         let cw = m
-            .chunks(1 << self.k0())
+            .par_chunks(1 << self.k0())
             .flat_map(|chunk| self.encode_base(chunk))
             .collect::<Vec<_>>();
 
         let mut cw = MatrixOwn::new(m.width(), cw);
         (1..=self.d()).for_each(|i| {
             let ni = 1 << (self.n0() + i);
-            cw.chunks_mut(ni).for_each(|mut chunk| {
+            cw.par_chunks_mut(ni).for_each(|mut chunk| {
                 let (mut l, mut r) = chunk.split_half_mut();
                 l.iter_mut()
                     .zip(r.iter_mut())
@@ -129,32 +107,7 @@ impl<F: Field> RandomFoldableCode<F> for Basecode<F> {
         cw
     }
 
-    fn fold<Ext: ExtensionField<F>>(&self, cw: &mut Vec<Ext>, x: Ext) {
-        let t = &self.ts_inv[cw.k() - self.n0() - 1];
-        let mid = cw.len() / 2;
-        let (l, r) = cw.split_at_mut(mid);
-        t.par_iter().zip_eq(l).zip_eq(r).for_each(|((&t, l), r)| {
-            let u0 = (*l + *r).halve();
-            let u1 = (*l - *r) * t;
-            *l = u0 + (u1 - u0) * x
-        });
-        cw.truncate(mid);
-    }
-
-    fn fold_single<Ext: ExtensionField<F>>(
-        &self,
-        height: usize,
-        index: usize,
-        l: &Ext,
-        r: &Ext,
-        x: &Ext,
-    ) -> Ext
-    where
-        F: Field,
-    {
-        let t = self.ts_inv[height][index];
-        let u0 = (*l + *r).halve();
-        let u1 = (*l - *r) * t;
-        u0 + (u1 - u0) * *x
+    fn ts_invs(&self) -> &[Vec<F>] {
+        &self.ts_inv
     }
 }

@@ -1,4 +1,5 @@
-use crate::basefold::code::Basecode;
+use crate::basefold::code::basecode::Basecode;
+use crate::basefold::code::rs::ReedSolomon;
 use crate::basefold::sumcheck::{EqSumcheck, Pointcheck, SumcheckProver};
 use crate::basefold::Basefold;
 use crate::data::MatrixOwn;
@@ -12,12 +13,18 @@ use p3_field::{ExtensionField, Field};
 use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
+use super::code::RandomFoldableCode;
+
 fn run_basefold<
     F: Field + FromUniformBytes,
     Ext: ExtensionField<F> + FromUniformBytes,
+    Code: RandomFoldableCode<F>,
     Sumcheck: SumcheckProver<F, Ext>,
 >(
+    mut rng: impl rand::RngCore,
     cfg: Sumcheck::Cfg,
+    code: Code,
+    width: usize,
 ) where
     StandardUniform: Distribution<F> + Distribution<Ext>,
 {
@@ -28,18 +35,13 @@ fn run_basefold<
     let hasher = Hasher::new();
     let compress = Compress::new();
 
-    let n_vars = 15;
-    let c = 2;
-    let k0 = 3;
-    let width = 3;
+    // let n_vars = 15;
     let n_test = 22;
-
-    let mut rng = crate::test::seed_rng();
-    let code = Basecode::<F>::generate(&mut rng, n_vars, k0, c);
 
     let mat_comm = MerkleTree::<F, [u8; 32], _, _>::new(hasher.clone(), compress.clone());
     let mat_comm_ext = MerkleTree::<Ext, [u8; 32], _, _>::new(hasher, compress);
 
+    let n_vars = code.n_vars();
     let basefold = Basefold::new(code, mat_comm, mat_comm_ext, n_test);
 
     let coeffs = (0..width << n_vars)
@@ -72,6 +74,25 @@ fn run_basefold<
 fn test_pcs() {
     type F = p3_goldilocks::Goldilocks;
     type Ext = BinomialExtensionField<F, 2>;
-    run_basefold::<F, Ext, EqSumcheck<F, Ext>>(2);
-    run_basefold::<F, Ext, Pointcheck<F, Ext>>(2);
+
+    let mut rng = crate::test::seed_rng();
+
+    let n_vars = 15;
+    let sumcheck_cfg = 2;
+    let width = 7;
+
+    {
+        let c = 3;
+        let k0 = 5;
+        let code = Basecode::<F>::generate(&mut rng, n_vars, k0, c);
+        run_basefold::<_, _, _, EqSumcheck<_, Ext>>(&mut rng, sumcheck_cfg, code.clone(), width);
+        run_basefold::<_, _, _, Pointcheck<_, Ext>>(&mut rng, sumcheck_cfg, code, width);
+    }
+
+    {
+        let c = 2;
+        let code = ReedSolomon::<F>::new(c, n_vars);
+        run_basefold::<_, _, _, EqSumcheck<_, Ext>>(&mut rng, sumcheck_cfg, code.clone(), width);
+        run_basefold::<_, _, _, Pointcheck<_, Ext>>(&mut rng, sumcheck_cfg, code, width);
+    }
 }

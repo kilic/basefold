@@ -1,5 +1,7 @@
+use crate::utils::bitreverse::BitReverse;
 use crate::utils::log2_strict;
 use core::fmt::Debug;
+use rand::distr::{Distribution, StandardUniform};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::{ParallelSlice, ParallelSliceMut};
 
@@ -44,6 +46,22 @@ impl<V> Matrix<Vec<V>> {
         Self::new(width, vec![V::default(); width * height])
     }
 
+    pub fn rand(rng: impl rand::Rng, width: usize, height: usize) -> Self
+    where
+        StandardUniform: Distribution<V>,
+    {
+        let values = crate::utils::n_rand(rng, width * height);
+        Self::new(width, values)
+    }
+
+    pub fn to_vec(&self) -> Vec<V>
+    where
+        V: Clone,
+    {
+        assert_eq!(self.width, 1);
+        self.storage.clone()
+    }
+
     pub fn as_mut(&mut self) -> Matrix<&mut [V]> {
         Matrix {
             storage: self.storage.as_mut(),
@@ -62,6 +80,7 @@ impl<V> Matrix<Vec<V>> {
     where
         V: Default + Clone,
     {
+        assert!(k >= self.k());
         self.storage.resize((1 << k) * self.width, V::default());
     }
 
@@ -69,6 +88,7 @@ impl<V> Matrix<Vec<V>> {
     where
         V: Default + Clone,
     {
+        assert!(k <= self.k());
         self.storage.truncate((1 << k) * self.width);
     }
 
@@ -248,5 +268,13 @@ impl<S: Storage> Matrix<S> {
         S: AsRef<[V]>,
     {
         self.split(self.k() - 1)
+    }
+
+    pub fn reverse_bits<V>(&mut self)
+    where
+        S: AsMut<[V]>,
+        V: Clone + Send + Sync,
+    {
+        self.storage.as_mut().reverse_bits_2d(self.width);
     }
 }

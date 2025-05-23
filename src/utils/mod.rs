@@ -1,4 +1,6 @@
 pub mod arithmetic;
+pub mod bitreverse;
+pub mod transpose;
 pub use arithmetic::*;
 
 #[macro_export]
@@ -23,7 +25,7 @@ pub fn log2_strict(n: usize) -> usize {
     res as usize
 }
 
-pub(crate) trait TwoAdicSlice<T>: core::ops::Deref<Target = [T]> {
+pub trait TwoAdicSlice<T>: core::ops::Deref<Target = [T]> {
     #[inline(always)]
     fn k(&self) -> usize {
         log2_strict(self.len())
